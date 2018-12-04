@@ -4,6 +4,9 @@
 #include <fuse.h>
 
 
+static struct fuse_operations ops = {
+};
+
 int main(int argc, char ** argv) {
-  return fuse_main(argc, argv, NULL, NULL);
+  return fuse_main(argc, argv, &ops, NULL);
 }
