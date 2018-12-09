@@ -1,2 +1,2 @@
-s3bd
-*.o
+bin/s3bd
+src/*.o
