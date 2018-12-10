@@ -1,12 +1,17 @@
 #define FUSE_USE_VERSION (26)
 
 #include <stdio.h>
-#include <fuse.h>
+#include <stdlib.h>
+#include <stddef.h>
 #include <errno.h>
 #include <string.h>
-#include <stddef.h>
 
-const char *block_device_name = "/bd";
+#include <fuse.h>
+
+#include "cmdline.h"
+
+
+const char *block_device_name = "/blocks";
 
 
 static int s3bd_getattr(const char *path, struct stat *stbuf)
@@ -60,28 +65,10 @@ static struct fuse_operations operations = {
 };
 
 
-struct s3bd_config {
-    char *location;
-};
-
-#define S3BD_OPT(t, p, v) { t, offsetof(struct s3bd_config, p), v }
-
-static struct fuse_opt s3bd_options[] = {
-    S3BD_OPT("location=%s", location, 0),
-    FUSE_OPT_END
-};
-
-static int s3bd_option_processor(void *data, const char *arg, int key,
-                                 struct fuse_args *outargs)
-{
-    fprintf(stderr, "XXX %d %s\n", key, arg);
-    return 1;
-}
-
 int main(int argc, char **argv)
 {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-    struct s3bd_config conf;
+    struct s3bd_configuration conf;
     memset(&conf, 0, sizeof(conf));
 
     fuse_opt_parse(&args, &conf, s3bd_options, s3bd_option_processor);

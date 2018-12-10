@@ -2,10 +2,13 @@ CC = gcc
 CFLAGS ?= -O0 -ggdb3
 
 
+src/%.o: src/%.c src/%.h
+	$(CC) $(CFLAGS) $< `pkg-config fuse --cflags` -c -o $@
+
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $< `pkg-config fuse --cflags` -c -o $@
 
-bin/s3bd: src/s3bd.o
+bin/s3bd: src/s3bd.o src/cmdline.o
 	$(CC) $(LDFLAGS) $^ `pkg-config fuse --cflags --libs` -o $@ 
 
 clean:
