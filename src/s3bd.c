@@ -4,6 +4,7 @@
 #include <fuse.h>
 #include <errno.h>
 #include <string.h>
+#include <stddef.h>
 
 const char *block_device_name = "/bd";
 
@@ -51,7 +52,7 @@ static int s3bd_read(const char *path, char *buf, size_t size,
     return 33;
 }
 
-static struct fuse_operations ops = {
+static struct fuse_operations operations = {
     .getattr = s3bd_getattr,
     .open = s3bd_open,
     .readdir = s3bd_readdir,
@@ -59,7 +60,31 @@ static struct fuse_operations ops = {
 };
 
 
+struct s3bd_config {
+    char *location;
+};
+
+#define S3BD_OPT(t, p, v) { t, offsetof(struct s3bd_config, p), v }
+
+static struct fuse_opt s3bd_options[] = {
+    S3BD_OPT("location=%s", location, 0),
+    FUSE_OPT_END
+};
+
+static int s3bd_option_processor(void *data, const char *arg, int key,
+                                 struct fuse_args *outargs)
+{
+    fprintf(stderr, "XXX %d %s\n", key, arg);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
-    return fuse_main(argc, argv, &ops, NULL);
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    struct s3bd_config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    fuse_opt_parse(&args, &conf, s3bd_options, s3bd_option_processor);
+
+    return fuse_main(args.argc, args.argv, &operations, NULL);
 }
