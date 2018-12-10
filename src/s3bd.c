@@ -11,9 +11,12 @@
 
 static struct fuse_operations operations = {
     .getattr = s3bd_getattr,
-    .open = s3bd_open,
     .readdir = s3bd_readdir,
+    .open = s3bd_open,
+    .flush = s3bd_flush,
     .read = s3bd_read,
+    .write = s3bd_write,
+    .fsync = s3bd_fsync
 };
 
 
@@ -27,5 +30,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "blockdir=%s mountpoint=%s ro=%d\n",
             configuration.blockdir, configuration.mountpoint,
             configuration.readonly);
+    blockdir = configuration.blockdir;
+
     return fuse_main(args.argc, args.argv, &operations, NULL);
 }
