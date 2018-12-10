@@ -17,6 +17,16 @@ extern int s3bd_write(const char *path, const char *buf, size_t size,
                       off_t offset, struct fuse_file_info *fi);
 extern int s3bd_fsync(const char *path, int isdatasync,
                       struct fuse_file_info *fi);
+extern int s3bd_getxattr(const char *path, const char *name, char *value,
+                         size_t size);
+extern int s3bd_setxattr(const char *path, const char *name,
+                         const char *value, size_t size, int flags);
+extern int s3bd_chmod(const char *path, mode_t mode);
+extern int s3bd_chown(const char *path, uid_t uid, gid_t gid);
+extern int s3bd_truncate(const char *path, off_t offset);
+extern int s3bd_ftruncate(const char *path, off_t offset,
+                          struct fuse_file_info *fi);
+extern int s3bd_utimens(const char *path, const struct timespec tv[2]);
 
 extern char *blockdir;
 

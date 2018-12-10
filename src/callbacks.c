@@ -77,55 +77,125 @@ int s3bd_read(const char *path, char *buf, size_t size,
               off_t offset, struct fuse_file_info *fi)
 {
     char block_path[0x1000];
-    int64_t block_number = offset / block_size;
-    int64_t block_offset = offset - (block_size * offset);
-    int64_t bytes_wanted = MIN(block_size - block_offset, size);
+    int size2 = size;
 
-    block_to_filename(block_number, block_path);
+    while (size2 > 0) {
+        int64_t block_number = offset / block_size;
+        int64_t block_offset = offset - (block_size * block_number);
+        int64_t bytes_wanted = MIN(block_size - block_offset, size2);
 
-    /* If block  can be found,  return relevant part of  its contents.
-       If  it cannot  be found,  return all  zeros (that  part of  the
-       virtual block device has not been written to, yet). */
-    if (access(block_path, R_OK) != -1) {
-        int fd = open(block_path, O_RDONLY);
-        int bytes_read = read(fd, buf, bytes_wanted);
-        close(fd);
-        return bytes_read;
-    } else {
-        memset(buf, 0, bytes_wanted);
-        return bytes_wanted;
+        block_to_filename(block_number, block_path);
+
+        /* If block can be found, return relevant part of its
+           contents.  If it cannot be found, return all zeros (that
+           part of the virtual block device has not been written to,
+           yet). */
+        if (access(block_path, R_OK) != -1) {
+            int fd = open(block_path, O_RDONLY);
+            int bytes_read = read(fd, buf, bytes_wanted);
+
+            close(fd);
+            if (bytes_read >= 0) {
+                buf += bytes_read;
+                size2 -= bytes_read;
+                offset += bytes_read;
+            } else {
+                return -EIO;
+            }
+        } else {
+            memset(buf, 0, bytes_wanted);
+            buf += bytes_wanted;
+            size2 -= bytes_wanted;
+            offset += bytes_wanted;
+        }
     }
+
+    return size;
 }
+
 
 int s3bd_write(const char *path, const char *buf, size_t size,
                off_t offset, struct fuse_file_info *fi)
 {
     char block_path[0x1000];
-    int64_t block_number = offset / block_size;
-    int64_t block_offset = offset - (block_size * offset);
-    int64_t bytes_wanted = MIN(block_size - block_offset, size);
-    int fd, bytes_written;
+    int size2 = size;
 
-    block_to_filename(block_number, block_path);
+    while (size2 > 0) {
+        int64_t block_number = offset / block_size;
+        int64_t block_offset = offset - (block_size * block_number);
+        int64_t bytes_wanted = MIN(block_size - block_offset, size2);
+        int fd, bytes_written;
 
-    if (access(block_path, W_OK) != -1) {       // File exists and is writable
-        fd = open(block_path, O_WRONLY);
-        lseek(fd, block_offset, SEEK_SET);
+        block_to_filename(block_number, block_path);
+
+        /* Get a file descriptor that points to the appropriate
+           block. Either open an existing one, or create one of the
+           appropriate size. */
+        if (access(block_path, W_OK) != -1) {   // File exists and is writable
+            fd = open(block_path, O_RDWR);
+            lseek(fd, block_offset, SEEK_SET);
+        } else if (access(block_path, F_OK) == -1) {    // File does not exist, make it
+            fd = open(block_path, O_RDWR | O_CREAT);
+            ftruncate(fd, block_size);
+            lseek(fd, block_offset, SEEK_SET);
+        } else {                // Evidently the file exists, but is not writable
+            return -EIO;
+        }
+
+        /* Write the block. */
         bytes_written = write(fd, buf, bytes_wanted);
         close(fd);
-        return bytes_written;
-    } else if (access(block_path, F_OK) == -1) {        // File does not exist, make it
-        fd = open(block_path, O_WRONLY);
-        ftruncate(fd, block_size);
-        lseek(fd, block_offset, SEEK_SET);
-        bytes_written = write(fd, buf, bytes_wanted);
-        close(fd);
-        return bytes_written;
-    } else {                    // Evidently the file exists but is not writable
-        return -EDQUOT;
+        if (bytes_written >= 0) {
+            buf += bytes_written;
+            size2 -= bytes_written;
+            offset += bytes_written;
+        } else {
+            return -EIO;
+        }
     }
+
+    return size;
 }
+
 
 int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
+}
+
+int s3bd_getxattr(const char *path, const char *name, char *value,
+                  size_t size)
+{
+    return -ENOTSUP;
+}
+
+int s3bd_setxattr(const char *path, const char *name, const char *value,
+                  size_t size, int flags)
+{
+    return -ENOTSUP;
+}
+
+int s3bd_chmod(const char *path, mode_t mode)
+{
+    return -EPERM;
+}
+
+int s3bd_chown(const char *path, uid_t uid, gid_t gid)
+{
+    return -EPERM;
+}
+
+int s3bd_truncate(const char *path, off_t offset)
+{
+    return -EPERM;
+}
+
+int s3bd_ftruncate(const char *path, off_t offset,
+                   struct fuse_file_info *fi)
+{
+    return -EPERM;
+}
+
+int s3bd_utimens(const char *path, const struct timespec tv[2])
+{
+    return -EPERM;
 }

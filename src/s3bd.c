@@ -16,7 +16,14 @@ static struct fuse_operations operations = {
     .flush = s3bd_flush,
     .read = s3bd_read,
     .write = s3bd_write,
-    .fsync = s3bd_fsync
+    .fsync = s3bd_fsync,
+    .getxattr = s3bd_getxattr,
+    .setxattr = s3bd_setxattr,
+    .chmod = s3bd_chmod,
+    .chown = s3bd_chown,
+    .truncate = s3bd_truncate,
+    .ftruncate = s3bd_ftruncate,
+    .utimens = s3bd_utimens,
 };
 
 
