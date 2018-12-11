@@ -160,6 +160,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
 
 int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
+    return 0;
 }
 
 int s3bd_getxattr(const char *path, const char *name, char *value,

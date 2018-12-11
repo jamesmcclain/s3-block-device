@@ -65,4 +65,5 @@ int s3bd_option_processor(void *data, const char *arg, int key,
         return 1;
     }
 
+    return 1;
 }
