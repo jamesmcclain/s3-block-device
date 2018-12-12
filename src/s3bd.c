@@ -24,8 +24,8 @@ static struct fuse_operations operations = {
     .truncate = s3bd_truncate,
     .ftruncate = s3bd_ftruncate,
     .utimens = s3bd_utimens,
+    .statfs = s3bd_statfs,
 };
-
 
 int main(int argc, char **argv)
 {

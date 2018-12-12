@@ -28,7 +28,8 @@ void *s3bd_options = _s3bd_options;
 struct s3bd_configuration configuration = { };
 
 static const char *help_string =
-    "usage: s3bd blockdir mountpoint [options]\n" "\n" "general options:\n"
+    "usage: s3bd blockdir mountpoint [options]\n"
+    "\n" "general options:\n"
     "\t-o opt,[opt...] \t mount options\n"
     "\t-h   --help     \t print help\n"
     "\t-V   --version  \t print version\n"

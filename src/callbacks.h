@@ -27,6 +27,7 @@ extern int s3bd_truncate(const char *path, off_t offset);
 extern int s3bd_ftruncate(const char *path, off_t offset,
                           struct fuse_file_info *fi);
 extern int s3bd_utimens(const char *path, const struct timespec tv[2]);
+extern int s3bd_statfs(const char * path, struct statvfs * buf);
 
 extern char *blockdir;
 
