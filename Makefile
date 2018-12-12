@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS ?= -Wall -O0 -ggdb3 -DDEBUG
+CFLAGS ?= -Wall -O0 -ggdb3
 
 
 src/%.o: src/%.c src/%.h

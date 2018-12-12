@@ -55,13 +55,8 @@ int main(int argc, char **argv)
 {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
-#if defined(DEBUG)
-    fuse_opt_parse(&args, NULL, NULL, NULL);
-    configuration.blockdir = "/tmp/blockdir";
-#else
     fuse_opt_parse(&args, &configuration, s3bd_options,
                    s3bd_option_processor);
-#endif
 
     fprintf(stderr, "blockdir=%s mountpoint=%s ro=%d\n",
             configuration.blockdir, configuration.mountpoint,
