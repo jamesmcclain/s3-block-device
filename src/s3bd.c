@@ -11,21 +11,38 @@
 
 static struct fuse_operations operations = {
     .getattr = s3bd_getattr,
-    .open = s3bd_open,
     .readdir = s3bd_readdir,
+    .open = s3bd_open,
+    .flush = s3bd_flush,
     .read = s3bd_read,
+    .write = s3bd_write,
+    .fsync = s3bd_fsync,
+    .getxattr = s3bd_getxattr,
+    .setxattr = s3bd_setxattr,
+    .chmod = s3bd_chmod,
+    .chown = s3bd_chown,
+    .truncate = s3bd_truncate,
+    .ftruncate = s3bd_ftruncate,
+    .utimens = s3bd_utimens,
+    .statfs = s3bd_statfs,
 };
-
 
 int main(int argc, char **argv)
 {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
+#if defined(DEBUG)
+    fuse_opt_parse(&args, NULL, NULL, NULL);
+    configuration.blockdir = "/tmp/blockdir";
+#else
     fuse_opt_parse(&args, &configuration, s3bd_options,
                    s3bd_option_processor);
+#endif
 
     fprintf(stderr, "blockdir=%s mountpoint=%s ro=%d\n",
             configuration.blockdir, configuration.mountpoint,
             configuration.readonly);
+    blockdir = configuration.blockdir;
+
     return fuse_main(args.argc, args.argv, &operations, NULL);
 }
