@@ -63,5 +63,6 @@ int main(int argc, char **argv)
             configuration.readonly);
     blockdir = configuration.blockdir;
 
+    fuse_opt_add_arg(&args, "-oallow_other");
     return fuse_main(args.argc, args.argv, &operations, NULL);
 }
