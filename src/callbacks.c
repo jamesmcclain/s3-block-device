@@ -166,7 +166,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
         int64_t block_number = current_offset / block_size;
         int64_t current_offset_in_block =
             current_offset - (block_size * block_number);
-        int64_t bytes_to_write =
+        volatile int64_t bytes_wanted = // Compiler bug?
             MIN(block_size - current_offset_in_block, bytes_to_write);
 
         block_to_filename(block_number, block_path);
