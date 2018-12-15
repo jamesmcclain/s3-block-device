@@ -62,6 +62,10 @@ int main(int argc, char **argv)
             configuration.blockdir, configuration.mountpoint,
             configuration.readonly);
     blockdir = configuration.blockdir;
+    readonly = configuration.readonly;
+    if (readonly) {
+        operations.write = NULL;
+    }
 
     fuse_opt_add_arg(&args, "-oallow_other");
     return fuse_main(args.argc, args.argv, &operations, NULL);

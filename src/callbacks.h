@@ -54,5 +54,6 @@ extern int s3bd_utimens(const char *path, const struct timespec tv[2]);
 extern int s3bd_statfs(const char * path, struct statvfs * buf);
 
 extern char *blockdir;
+extern int readonly;
 
 #endif
