@@ -27,6 +27,8 @@
 
 #define FUSE_USE_VERSION (26)
 
+#include <stdint.h>
+
 #include <fuse.h>
 
 extern int s3bd_getattr(const char *path, struct stat *stbuf);
@@ -51,8 +53,11 @@ extern int s3bd_truncate(const char *path, off_t offset);
 extern int s3bd_ftruncate(const char *path, off_t offset,
                           struct fuse_file_info *fi);
 extern int s3bd_utimens(const char *path, const struct timespec tv[2]);
-extern int s3bd_statfs(const char * path, struct statvfs * buf);
+extern int s3bd_statfs(const char *path, struct statvfs *buf);
 
+extern int64_t device_size;
+extern int64_t block_size;
 extern char *blockdir;
+extern int readonly;
 
 #endif

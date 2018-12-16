@@ -35,9 +35,10 @@
 #include "callbacks.h"
 
 static const char *device_name = "/blocks";
-static const int64_t device_size = 0x40000000;
-static const int64_t block_size = 0x100000;
 
+int64_t device_size;
+int64_t block_size;
+int readonly = 0;
 char *blockdir = NULL;
 const int PATHLEN = 0x1000;
 
@@ -67,7 +68,11 @@ int s3bd_getattr(const char *path, struct stat *stbuf)
         stbuf->st_mtime = 0;
         stbuf->st_ctime = 0;
     } else if (strcmp(path, device_name) == 0) {
-        stbuf->st_mode = S_IFREG | 0600;
+        if (readonly) {
+            stbuf->st_mode = S_IFREG | 0400;
+        } else {
+            stbuf->st_mode = S_IFREG | 0600;
+        }
         stbuf->st_nlink = 1;
         stbuf->st_size = device_size;
         stbuf->st_ino = 2;

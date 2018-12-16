@@ -26,6 +26,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <fuse.h>
 
@@ -54,6 +55,7 @@ static struct fuse_operations operations = {
 int main(int argc, char **argv)
 {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    char fsname[0x1000];
 
     fuse_opt_parse(&args, &configuration, s3bd_options,
                    s3bd_option_processor);
@@ -62,7 +64,15 @@ int main(int argc, char **argv)
             configuration.blockdir, configuration.mountpoint,
             configuration.readonly);
     blockdir = configuration.blockdir;
+    readonly = configuration.readonly;
+    if (readonly) {
+        operations.write = NULL;
+    }
 
+    device_size = 0x40000000;
+    block_size = sysconf(_SC_PAGESIZE);
+    sprintf(fsname, "-ofsname=%s", blockdir);
+    fuse_opt_add_arg(&args, fsname);
     fuse_opt_add_arg(&args, "-oallow_other");
     return fuse_main(args.argc, args.argv, &operations, NULL);
 }
