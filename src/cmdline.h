@@ -31,8 +31,9 @@
 
 
 struct s3bd_configuration {
+    char *backend;
     char *blockdir;
-    char * mountpoint;
+    char *mountpoint;
     int readonly;
 };
 
