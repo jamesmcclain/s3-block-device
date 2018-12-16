@@ -11,7 +11,7 @@ src/%.o: src/%.c
 	$(CC) $(CFLAGS) $< `pkg-config fuse --cflags` -c -o $@
 
 bin/s3bd: src/s3bd.o src/cmdline.o
-	$(CC) $(LDFLAGS) $^ `pkg-config fuse --cflags --libs` -o $@ 
+	$(CC) $(LDFLAGS) $^ -ldl `pkg-config fuse --cflags --libs` -o $@
 
 src/local/%.o: src/local/%.c src/local/%.h
 	$(CC) $(CFLAGS) $< -fpic -fPIC `pkg-config fuse --cflags` -c -o $@
