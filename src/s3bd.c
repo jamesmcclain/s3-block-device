@@ -26,6 +26,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <fuse.h>
 
@@ -68,6 +69,8 @@ int main(int argc, char **argv)
         operations.write = NULL;
     }
 
+    device_size = 0x40000000;
+    block_size = sysconf(_SC_PAGESIZE);
     sprintf(fsname, "-ofsname=%s", blockdir);
     fuse_opt_add_arg(&args, fsname);
     fuse_opt_add_arg(&args, "-oallow_other");

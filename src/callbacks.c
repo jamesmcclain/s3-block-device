@@ -35,9 +35,9 @@
 #include "callbacks.h"
 
 static const char *device_name = "/blocks";
-static const int64_t device_size = 0x40000000;
-static const int64_t block_size = 0x100000;
 
+int64_t device_size;
+int64_t block_size;
 int readonly = 0;
 char *blockdir = NULL;
 const int PATHLEN = 0x1000;
