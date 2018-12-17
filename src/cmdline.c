@@ -59,18 +59,21 @@ int s3bd_option_processor(void *data, const char *arg, int key,
 
     if (key == KEY_HELP) {
         fprintf(stderr,
-                "usage: %s blockdir mountpoint [options]\n\n"
+                "usage: %s so blockdir mountpoint [options]\n\n"
                 "s3bd options:\n"
                 "\t-o ro           \t read-only\n\n"
                 "general options:\n"
                 "\t-o opt,[opt...] \t mount options (see the fuse man page)\n"
                 "\t-h   --help     \t print help\n"
                 "\t-V   --version  \t print version\n", outargs->argv[0]);
-        exit(1);
+        exit(EXIT_SUCCESS);
     } else if (key == KEY_VERSION) {
         fprintf(stderr, "0.0.1\n");
-        exit(0);
-    } else if (key == FUSE_OPT_KEY_NONOPT && configuration.blockdir == NULL) {  // blockdir
+        exit(EXIT_SUCCESS);
+    } else if (key == FUSE_OPT_KEY_NONOPT && conf->backend == NULL) {   // so
+        conf->backend = strdup(arg);
+        return 0;
+    } else if (key == FUSE_OPT_KEY_NONOPT && conf->blockdir == NULL) {  // blockdir
         conf->blockdir = strdup(arg);
         return 0;
     } else if (key == FUSE_OPT_KEY_NONOPT) {    // mountpoint

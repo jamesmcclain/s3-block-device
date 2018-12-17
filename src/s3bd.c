@@ -25,54 +25,87 @@
 #define FUSE_USE_VERSION (26)
 
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dlfcn.h>
 
 #include <fuse.h>
 
-#include "callbacks.h"
 #include "cmdline.h"
 
+/* Backend interface */
+static struct fuse_operations operations = { };
+static char ** blockdir = NULL;
+static int64_t * block_size = NULL;
+static int64_t * device_size = NULL;
+static int * readonly = NULL;
 
-static struct fuse_operations operations = {
-    .getattr = s3bd_getattr,
-    .readdir = s3bd_readdir,
-    .open = s3bd_open,
-    .flush = s3bd_flush,
-    .read = s3bd_read,
-    .write = s3bd_write,
-    .fsync = s3bd_fsync,
-    .getxattr = s3bd_getxattr,
-    .setxattr = s3bd_setxattr,
-    .chmod = s3bd_chmod,
-    .chown = s3bd_chown,
-    .truncate = s3bd_truncate,
-    .ftruncate = s3bd_ftruncate,
-    .utimens = s3bd_utimens,
-    .statfs = s3bd_statfs,
-};
 
 int main(int argc, char **argv)
 {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    void *handle;
     char fsname[0x1000];
 
+    /* Parse the command line */
     fuse_opt_parse(&args, &configuration, s3bd_options,
                    s3bd_option_processor);
 
-    fprintf(stderr, "blockdir=%s mountpoint=%s ro=%d\n",
-            configuration.blockdir, configuration.mountpoint,
-            configuration.readonly);
-    blockdir = configuration.blockdir;
-    readonly = configuration.readonly;
-    if (readonly) {
-        operations.write = NULL;
+    /* Report results of parsing */
+    fprintf(stderr, "backend=%s blockdir=%s mountpoint=%s ro=%d\n",
+            configuration.backend, configuration.blockdir,
+            configuration.mountpoint, configuration.readonly);
+
+    if (configuration.backend == NULL || configuration.blockdir == NULL
+        || configuration.mountpoint == NULL) {
+        exit(EXIT_FAILURE);
     }
 
-    device_size = 0x40000000;
-    block_size = sysconf(_SC_PAGESIZE);
-    sprintf(fsname, "-ofsname=%s", blockdir);
+    /* Load the backend */
+    handle = dlopen(configuration.backend, RTLD_NOW | RTLD_LOCAL);
+    if (handle == NULL) {
+        fprintf(stderr, "Unable to load backend library.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Register callbacks */
+    operations.getattr = dlsym(handle, "s3bd_getattr");
+    operations.readdir = dlsym(handle, "s3bd_readdir");
+    operations.open = dlsym(handle, "s3bd_open");
+    operations.flush = dlsym(handle, "s3bd_flush");
+    operations.read = dlsym(handle, "s3bd_read");
+    if (!configuration.readonly) {
+        operations.write = dlsym(handle, "s3bd_write");
+    }
+    operations.fsync = dlsym(handle, "s3bd_fsync");
+    operations.getxattr = dlsym(handle, "s3bd_getxattr");
+    operations.setxattr = dlsym(handle, "s3bd_setxattr");
+    operations.chmod = dlsym(handle, "s3bd_chmod");
+    operations.chown = dlsym(handle, "s3bd_chown");
+    operations.truncate = dlsym(handle, "s3bd_truncate");
+    operations.ftruncate = dlsym(handle, "s3bd_ftruncate");
+    operations.utimens = dlsym(handle, "s3bd_utimens");
+    operations.statfs = dlsym(handle, "s3bd_statfs");
+
+    /* Bind variables in backend library */
+    blockdir = dlsym(handle, "blockdir");
+    readonly = dlsym(handle, "readonly");
+    device_size = dlsym(handle, "device_size");
+    block_size = dlsym(handle, "block_size");
+
+    /* Report information from command line to backend */
+    *blockdir = configuration.blockdir;
+    *readonly = configuration.readonly;
+    *device_size = 0x40000000;
+    *block_size = sysconf(_SC_PAGESIZE);
+
+    /* Arguments for libfuse */
+    sprintf(fsname, "-ofsname=%s", *blockdir);
     fuse_opt_add_arg(&args, fsname);
     fuse_opt_add_arg(&args, "-oallow_other");
+
+    /* Delegate to libfuse */
     return fuse_main(args.argc, args.argv, &operations, NULL);
 }

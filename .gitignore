@@ -1,2 +1,4 @@
 bin/s3bd
 src/*.o
+lib/*.so
+src/local/*.o
