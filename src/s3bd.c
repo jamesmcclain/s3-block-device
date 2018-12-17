@@ -58,6 +58,11 @@ int main(int argc, char **argv)
             configuration.backend, configuration.blockdir,
             configuration.mountpoint, configuration.readonly);
 
+    if (configuration.backend == NULL || configuration.blockdir == NULL
+        || configuration.mountpoint == NULL) {
+        exit(EXIT_FAILURE);
+    }
+
     /* Load the backend */
     handle = dlopen(configuration.backend, RTLD_NOW | RTLD_LOCAL);
     if (handle == NULL) {
