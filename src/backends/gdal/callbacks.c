@@ -90,9 +90,8 @@ int s3bd_getattr(const char *path, struct stat *stbuf)
     return res;
 }
 
-int s3bd_readdir(const char *path, void *buf,
-                 fuse_fill_dir_t filler, off_t offset,
-                 struct fuse_file_info *fi)
+int s3bd_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                 off_t offset, struct fuse_file_info *fi)
 {
     if (strcmp(path, "/") != 0)
         return -ENOENT;
@@ -117,8 +116,7 @@ int s3bd_flush(const char *path, struct fuse_file_info *fi)
     return 0;
 }
 
-int s3bd_read(const char *path, char *buf, size_t size,
-              off_t offset, struct fuse_file_info *fi)
+int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     char block_path[PATHLEN];
     void *buffer_ptr = buf;
@@ -128,10 +126,8 @@ int s3bd_read(const char *path, char *buf, size_t size,
     while (bytes_to_read > 0) {
         VSILFILE *handle = NULL;
         int64_t block_number = current_offset / block_size;
-        int64_t current_offset_in_block =
-            current_offset - (block_size * block_number);
-        int64_t bytes_wanted =
-            MIN(block_size - current_offset_in_block, bytes_to_read);
+        int64_t current_offset_in_block = current_offset - (block_size * block_number);
+        int64_t bytes_wanted = MIN(block_size - current_offset_in_block, bytes_to_read);
 
         block_to_filename(block_number, block_path);
 
@@ -139,15 +135,18 @@ int s3bd_read(const char *path, char *buf, size_t size,
            contents.  If it cannot be found, return all zeros (that
            part of the virtual block device has not been written to,
            yet). */
-        if ((handle = VSIFOpenL(block_path, "r")) == NULL) {    // Resource does not exist (or is not readable)
-            memset(buffer_ptr, 0, bytes_wanted);
+        if ((handle = VSIFOpenL(block_path, "r")) == NULL) {
+            memset(buffer_ptr, 0, bytes_wanted);        // Resource does not exist (or is not readable)
         } else {
-            if (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1) {   // Resource must be seekable
-                return -EIO;
-            } else if (VSIFReadL(buffer_ptr, bytes_wanted, 1, handle) != 1) {   // Resource must be readable
-                return -EIO;
-            } else if (VSIFCloseL(handle) == -1) {      // Resource must be successfully closed
-                return -EIO;
+            if ((current_offset_in_block != 0)
+                && (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1)) {
+                return -EIO;    // Resource must be seekable
+            } else if (VSIFReadL(buffer_ptr, bytes_wanted, 1, handle) != 1) {
+                /* Creation of the handle might succeed even if the
+                   remote asset does not exist */
+                memset(buffer_ptr, 0, bytes_wanted);
+            } else if (VSIFCloseL(handle) == -1) {
+                return -EIO;    // Resource must be successfully closed
             }
         }
 
@@ -173,8 +172,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
         VSILFILE *handle = NULL;
         struct stat statbuf;
         int64_t block_number = current_offset / block_size;
-        int64_t current_offset_in_block =
-            current_offset - (block_size * block_number);
+        int64_t current_offset_in_block = current_offset - (block_size * block_number);
         volatile int64_t bytes_wanted = // Compiler bug?
             MIN(block_size - current_offset_in_block, bytes_to_write);
 
@@ -184,18 +182,20 @@ int s3bd_write(const char *path, const char *buf, size_t size,
            block. Either open an existing one, or create one of the
            appropriate size. */
         if (VSIStatL(block_path, (void *) &statbuf)) {  // Resource exists
-            if ((handle = VSIFOpenL(block_path, "w")) == NULL) {        // Resource must be openable for write
-                return -EIO;
-            } else if (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1) {    // Resource must be seekable
-                return -EIO;
+            if ((handle = VSIFOpenL(block_path, "w")) == NULL) {
+                return -EIO;    // Resource must be openable for write
+            } else if ((current_offset_in_block != 0)
+                       && (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1)) {
+                return -EIO;    // Resource must be seekable
             }
         } else {                // Resource does not exist, make it
-            if ((handle = VSIFOpenL(block_path, "w")) == NULL) {        // Resource must be openable for write
-                return -EIO;
-            } else if (VSIFTruncateL(handle, block_size) != 0) {        // Resource must be truncatable
-                return -EIO;
-            } else if (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1) {    // Resource must be seekable
-                return -EIO;
+            if ((handle = VSIFOpenL(block_path, "w")) == NULL) {
+                return -EIO;    // Resource must be openable for write
+            } else if (VSIFTruncateL(handle, block_size) != 0) {
+                return -EIO;    // Resource must be truncatable
+            } else if ((current_offset_in_block != 0)
+                       && (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1)) {
+                return -EIO;    // Resource must be seekable
             }
         }
 
@@ -215,19 +215,18 @@ int s3bd_write(const char *path, const char *buf, size_t size,
 }
 
 
+
 int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
     return 0;
 }
 
-int s3bd_getxattr(const char *path, const char *name, char *value,
-                  size_t size)
+int s3bd_getxattr(const char *path, const char *name, char *value, size_t size)
 {
     return -ENOTSUP;
 }
 
-int s3bd_setxattr(const char *path, const char *name, const char *value,
-                  size_t size, int flags)
+int s3bd_setxattr(const char *path, const char *name, const char *value, size_t size, int flags)
 {
     return -ENOTSUP;
 }
@@ -247,8 +246,7 @@ int s3bd_truncate(const char *path, off_t offset)
     return -EPERM;
 }
 
-int s3bd_ftruncate(const char *path, off_t offset,
-                   struct fuse_file_info *fi)
+int s3bd_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
     return -EPERM;
 }
