@@ -140,10 +140,11 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
         } else {
             if ((current_offset_in_block != 0)
                 && (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1)) {
+                VSIFCloseL(handle);
                 return -EIO;    // Resource must be seekable
             } else if (VSIFReadL(buffer_ptr, bytes_wanted, 1, handle) != 1) {
-                /* Creation of the handle might succeed even if the
-                   remote asset does not exist */
+                /* Creation of the handle might have succeed even if
+                   the remote asset does not exist. */
                 memset(buffer_ptr, 0, bytes_wanted);
             } else if (VSIFCloseL(handle) == -1) {
                 return -EIO;    // Resource must be successfully closed
@@ -159,7 +160,6 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
     return size;
 }
 
-
 int s3bd_write(const char *path, const char *buf, size_t size,
                off_t offset, struct fuse_file_info *fi)
 {
@@ -170,42 +170,65 @@ int s3bd_write(const char *path, const char *buf, size_t size,
 
     while (bytes_to_write > 0) {
         VSILFILE *handle = NULL;
-        struct stat statbuf;
         int64_t block_number = current_offset / block_size;
         int64_t current_offset_in_block = current_offset - (block_size * block_number);
         volatile int64_t bytes_wanted = // Compiler bug?
             MIN(block_size - current_offset_in_block, bytes_to_write);
+        int64_t final_offset = current_offset_in_block + bytes_wanted;
+        int64_t bytes_at_end = block_size - final_offset;
 
         block_to_filename(block_number, block_path);
 
-        /* Get a file descriptor that points to the appropriate
-           block. Either open an existing one, or create one of the
-           appropriate size. */
-        if (VSIStatL(block_path, (void *) &statbuf)) {  // Resource exists
-            if ((handle = VSIFOpenL(block_path, "w")) == NULL) {
-                return -EIO;    // Resource must be openable for write
-            } else if ((current_offset_in_block != 0)
-                       && (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1)) {
-                return -EIO;    // Resource must be seekable
-            }
-        } else {                // Resource does not exist, make it
-            if ((handle = VSIFOpenL(block_path, "w")) == NULL) {
-                return -EIO;    // Resource must be openable for write
-            } else if (VSIFTruncateL(handle, block_size) != 0) {
-                return -EIO;    // Resource must be truncatable
-            } else if ((current_offset_in_block != 0)
-                       && (VSIFSeekL(handle, current_offset_in_block, SEEK_SET) == -1)) {
-                return -EIO;    // Resource must be seekable
-            }
-        }
-
-        /* Write the block. */
-        if (VSIFWriteL(buffer_ptr, bytes_to_write, 1, handle) != 1) {
-            return -EIO;
-        } else if (VSIFCloseL(handle) == -1) {
+        /* Attempt to open the resource for writing. */
+        if ((handle = VSIFOpenL(block_path, "w")) == NULL) {
             return -EIO;
         }
 
+        /* Seeks are forbidden for at least one interesting VSI
+           backend (S3), so simulate seeking by reading and writing
+           bytes. */
+        if (current_offset_in_block != 0) {
+            uint8_t *bytes = calloc(1, current_offset_in_block);
+            VSILFILE *read_handle = VSIFOpenL(block_path, "r");
+
+            VSIFReadL(bytes, current_offset_in_block, 1, read_handle);
+            VSIFCloseL(read_handle);
+            if (VSIFWriteL(bytes, current_offset_in_block, 1, handle) != 1) {
+                free(bytes);
+                VSIFCloseL(handle);
+                return -EIO;
+            }
+            free(bytes);
+        }
+
+        /* Write the given bytes into the block. */
+        if (VSIFWriteL(buffer_ptr, bytes_wanted, 1, handle) != 1) {
+            VSIFCloseL(handle);
+            return -EIO;
+        }
+
+        /* Write the remaining bytes in the block. */
+        if (bytes_at_end > 0) {
+            uint8_t *bytes = calloc(1, bytes_at_end);
+            VSILFILE *read_handle = VSIFOpenL(block_path, "r");
+
+            VSIFSeekL(read_handle, final_offset, SEEK_SET);
+            VSIFReadL(bytes, bytes_at_end, 1, read_handle);
+            VSIFCloseL(read_handle);
+            if (VSIFWriteL(bytes, bytes_at_end, 1, handle) != 1) {
+                free(bytes);
+                VSIFCloseL(handle);
+                return -EIO;
+            }
+            free(bytes);
+        }
+
+        /* Close the resource. */
+        if (VSIFCloseL(handle) == -1) {
+            return -EIO;
+        }
+
+        /* State */
         buffer_ptr += bytes_wanted;
         current_offset += bytes_wanted;
         bytes_to_write -= bytes_wanted;
@@ -213,8 +236,6 @@ int s3bd_write(const char *path, const char *buf, size_t size,
 
     return size;
 }
-
-
 
 int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
