@@ -1,4 +1,5 @@
 bin/s3bd
 src/*.o
 lib/*.so
-src/local/*.o
+src/backends/*/*.o
+src/backends/*/*.so

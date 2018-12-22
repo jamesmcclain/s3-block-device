@@ -29,7 +29,6 @@
 
 #include "cmdline.h"
 
-
 #define S3BD_OPT(t, p, v) { t, offsetof(struct s3bd_configuration, p), v }
 
 enum {

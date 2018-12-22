@@ -32,7 +32,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include "callbacks.h"
+#include "../backend.h"
 
 static const char *device_name = "/blocks";
 
