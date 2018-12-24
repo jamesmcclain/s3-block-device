@@ -1,7 +1,7 @@
 # s3-block-device #
 
 This project uses [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to expose a block "device" (actually just a file), possibly backed by remote resources, on which a filesystem with full semantics can be created.
-That allows one create a normal XFS or ext4 filesystem (as well as many others) on [S3](https://en.wikipedia.org/wiki/Amazon_S3) that is locally mountable and behaves normally in all respects (except for speed).
+That allows one to create a normal XFS or ext4 filesystem (as well as many others) on [S3](https://en.wikipedia.org/wiki/Amazon_S3) that is locally mountable and behaves normally in all respects (except for speed).
 
 ## To Build ##
 
