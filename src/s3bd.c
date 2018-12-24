@@ -37,10 +37,11 @@
 
 /* Backend interface */
 static struct fuse_operations operations = { };
-static char ** blockdir = NULL;
-static int64_t * block_size = NULL;
-static int64_t * device_size = NULL;
-static int * readonly = NULL;
+
+static char **blockdir = NULL;
+static int64_t *block_size = NULL;
+static int64_t *device_size = NULL;
+static int *readonly = NULL;
 
 
 int main(int argc, char **argv)
@@ -50,8 +51,7 @@ int main(int argc, char **argv)
     char fsname[0x1000];
 
     /* Parse the command line */
-    fuse_opt_parse(&args, &configuration, s3bd_options,
-                   s3bd_option_processor);
+    fuse_opt_parse(&args, &configuration, s3bd_options, s3bd_option_processor);
 
     /* Report results of parsing */
     fprintf(stderr, "backend=%s blockdir=%s mountpoint=%s ro=%d\n",

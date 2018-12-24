@@ -90,8 +90,7 @@ int s3bd_getattr(const char *path, struct stat *stbuf)
 }
 
 int s3bd_readdir(const char *path, void *buf,
-                 fuse_fill_dir_t filler, off_t offset,
-                 struct fuse_file_info *fi)
+                 fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)
 {
     if (strcmp(path, "/") != 0)
         return -ENOENT;
@@ -142,8 +141,7 @@ void fullread(int fd, void *buffer, int bytes)
     }
 }
 
-int s3bd_read(const char *path, char *buf, size_t size,
-              off_t offset, struct fuse_file_info *fi)
+int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     char block_path[PATHLEN];
     void *buffer_ptr = buf;
@@ -152,10 +150,8 @@ int s3bd_read(const char *path, char *buf, size_t size,
 
     while (bytes_to_read > 0) {
         int64_t block_number = current_offset / block_size;
-        int64_t current_offset_in_block =
-            current_offset - (block_size * block_number);
-        int64_t bytes_wanted =
-            MIN(block_size - current_offset_in_block, bytes_to_read);
+        int64_t current_offset_in_block = current_offset - (block_size * block_number);
+        int64_t bytes_wanted = MIN(block_size - current_offset_in_block, bytes_to_read);
 
         block_to_filename(block_number, block_path);
 
@@ -193,8 +189,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     while (bytes_to_write > 0) {
         int fd;
         int64_t block_number = current_offset / block_size;
-        int64_t current_offset_in_block =
-            current_offset - (block_size * block_number);
+        int64_t current_offset_in_block = current_offset - (block_size * block_number);
         volatile int64_t bytes_wanted = // Compiler bug?
             MIN(block_size - current_offset_in_block, bytes_to_write);
 
@@ -233,14 +228,12 @@ int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
     return 0;
 }
 
-int s3bd_getxattr(const char *path, const char *name, char *value,
-                  size_t size)
+int s3bd_getxattr(const char *path, const char *name, char *value, size_t size)
 {
     return -ENOTSUP;
 }
 
-int s3bd_setxattr(const char *path, const char *name, const char *value,
-                  size_t size, int flags)
+int s3bd_setxattr(const char *path, const char *name, const char *value, size_t size, int flags)
 {
     return -ENOTSUP;
 }
@@ -260,8 +253,7 @@ int s3bd_truncate(const char *path, off_t offset)
     return -EPERM;
 }
 
-int s3bd_ftruncate(const char *path, off_t offset,
-                   struct fuse_file_info *fi)
+int s3bd_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
     return -EPERM;
 }

@@ -51,8 +51,7 @@ void *s3bd_options = _s3bd_options;
 struct s3bd_configuration configuration = { };
 
 
-int s3bd_option_processor(void *data, const char *arg, int key,
-                          struct fuse_args *outargs)
+int s3bd_option_processor(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
     struct s3bd_configuration *conf = (struct s3bd_configuration *) data;
 
