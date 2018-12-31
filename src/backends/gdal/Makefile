@@ -4,7 +4,7 @@ BOOST_ROOT ?= /usr/include
 all: libs3bd_gdal.so
 
 %.o: %.cpp
-	$(CXX) $(CFLAGS) $(CXXFLAGS) -L$(BOOST_ROOT) $< -fPIC -c -o $@
+	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC -c -o $@
 
 %.o: %.c ../backend.h
 	$(CC) $(CFLAGS) $< -fPIC `pkg-config gdal --cflags` `pkg-config fuse --cflags` -c -o $@
