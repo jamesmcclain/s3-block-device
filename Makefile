@@ -14,7 +14,7 @@ bin/s3bd: src/s3bd.o src/cmdline.o
 	$(CC) $(LDFLAGS) $^ -ldl `pkg-config fuse --cflags --libs` -o $@
 
 lib/libs3bd_%.so: src/backends/%
-	CC=$(CC) CFLAGS="$(CFLAGS)" make -C src/backends/$*
+	BOOST_ROOT=$(BOOST_ROOT) CC=$(CC) CFLAGS="$(CFLAGS)" make -C src/backends/$*
 	cp -f src/backends/$*/libs3bd_$*.so $@
 
 clean:
