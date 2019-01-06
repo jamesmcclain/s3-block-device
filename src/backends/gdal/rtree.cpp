@@ -1,7 +1,7 @@
 /*
  * The MIT License
  *
- * Copyright (c) 2018 James McClain
+ * Copyright (c) 2018-2019 James McClain
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,7 @@
  */
 
 #include <cstdio>
+#include <cstdint>
 
 // https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples/index_stored_in_mapped_file_using_boost_interprocess.html
 // https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples.html
@@ -32,3 +33,16 @@
 #include <boost/geometry/geometries/box.hpp>
 #include <boost/geometry/index/rtree.hpp>
 
+namespace bi  = boost::interprocess;
+namespace bg  = boost::geometry;
+namespace bgm = boost::geometry::model;
+namespace bgi = boost::geometry::index;
+
+typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
+typedef bgm::box<point_t> range_t;
+typedef std::pair<range_t, std::string> value_t;
+typedef bgi::linear<16, 4> params_t;
+typedef bgi::indexable<value_t> indexable_t;
+typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
+
+rtree_t rtree();
