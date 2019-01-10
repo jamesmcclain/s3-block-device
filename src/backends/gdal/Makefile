@@ -1,7 +1,8 @@
 CFLAGS ?= -Wall -O0 -ggdb3
 BOOST_ROOT ?= /usr/include
 
-all: libs3bd_gdal.so
+all: libs3bd_gdal.so unit_tests
+	unit_tests
 
 %.o: %.cpp
 	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC -c -o $@
@@ -11,6 +12,9 @@ all: libs3bd_gdal.so
 
 libs3bd_gdal.so: callbacks.o rtree.o
 	$(CC) $(CFLAGS) $^ `pkg-config gdal --libs` -lstdc++ -shared -o $@
+
+unit_tests: unit_tests.o rtree.o
+	$(CC) $(CFLAGS) $^ -lm -lstdc++ -o $@
 
 clean:
 	rm -f *.o

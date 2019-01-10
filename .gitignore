@@ -3,3 +3,4 @@ src/*.o
 lib/*.so
 src/backends/*/*.o
 src/backends/*/*.so
+src/backends/gdal/unit_tests

@@ -35,6 +35,9 @@
 #include <boost/geometry/geometries/box.hpp>
 #include <boost/geometry/index/rtree.hpp>
 
+#include "rtree.h"
+
+
 namespace bi  = boost::interprocess;
 namespace bg  = boost::geometry;
 namespace bgm = boost::geometry::model;
@@ -51,14 +54,14 @@ typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
 rtree_t * rtree_ptr = nullptr;
 
 
-extern "C" int init()
+extern "C" int rtree_init()
 {
     if (rtree_ptr == nullptr)
         rtree_ptr = new rtree_t();
     return 1;
 }
 
-extern "C" int deinit()
+extern "C" int rtree_deinit()
 {
     if (rtree_ptr != nullptr)
         delete rtree_ptr;
@@ -66,7 +69,7 @@ extern "C" int deinit()
     return 1;
 }
 
-extern "C" int insert(const char *filename, uint64_t start, uint64_t end)
+extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto filename_str = std::string(strdup(filename));
@@ -76,13 +79,13 @@ extern "C" int insert(const char *filename, uint64_t start, uint64_t end)
     return 1;
 }
 
-extern "C" int query(char **filenames, uint64_t start, uint64_t end)
+extern "C" int rtree_query(char **filenames, uint64_t start, uint64_t end)
 {
-  auto range = range_t(point_t(start), point_t(end));
-  auto intersects = bgi::intersects(range);
-  auto candidates = std::vector<value_t>();
+    auto range = range_t(point_t(start), point_t(end));
+    auto intersects = bgi::intersects(range);
+    auto candidates = std::vector < value_t > ();
 
-  rtree_ptr->query(intersects, std::back_inserter(candidates));
+    rtree_ptr->query(intersects, std::back_inserter(candidates));
 
-  return 1;
+    return 1;
 }
