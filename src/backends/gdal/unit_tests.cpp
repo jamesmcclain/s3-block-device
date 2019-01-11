@@ -38,3 +38,13 @@ BOOST_AUTO_TEST_CASE(rtree_deinit_test)
   BOOST_TEST(rtree_deinit() == 1);
 }
 
+BOOST_AUTO_TEST_CASE(rtree_insert_remove_test)
+{
+  rtree_init();
+  BOOST_TEST(rtree_size() == 0);
+  rtree_insert("/tmp/a", 0, 1);
+  BOOST_TEST(rtree_size() == 1);
+  rtree_remove("/tmp/a", 0, 1);
+  BOOST_TEST(rtree_size() == 0);
+  rtree_deinit();
+}

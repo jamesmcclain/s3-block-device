@@ -51,7 +51,7 @@ typedef bgi::indexable<value_t> indexable_t;
 typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
 
 
-rtree_t * rtree_ptr = nullptr;
+rtree_t *rtree_ptr = nullptr;
 
 
 extern "C" int rtree_init()
@@ -76,7 +76,22 @@ extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end)
     auto value = std::make_pair(range, filename_str);
 
     rtree_ptr->insert(value);
-    return 1;
+    return rtree_ptr->size();
+}
+
+extern "C" int rtree_remove(const char *filename, uint64_t start, uint64_t end)
+{
+    auto range = range_t(point_t(start), point_t(end));
+    auto filename_str = std::string(strdup(filename));
+    auto value = std::make_pair(range, filename_str);
+
+    rtree_ptr->remove(value);
+    return rtree_ptr->size();
+}
+
+extern "C" int rtree_size()
+{
+    return rtree_ptr->size();
 }
 
 extern "C" int rtree_query(char **filenames, uint64_t start, uint64_t end)
@@ -87,5 +102,5 @@ extern "C" int rtree_query(char **filenames, uint64_t start, uint64_t end)
 
     rtree_ptr->query(intersects, std::back_inserter(candidates));
 
-    return 1;
+    return candidates.size();
 }
