@@ -73,7 +73,7 @@ extern "C" int rtree_deinit()
 extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto filename_str = std::string(strdup(filename));
+    auto filename_str = std::string(filename);
     auto value = std::make_pair(range, filename_str);
 
     rtree_ptr->insert(value);
@@ -83,7 +83,7 @@ extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end)
 extern "C" int rtree_remove(const char *filename, uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto filename_str = std::string(strdup(filename));
+    auto filename_str = std::string(filename);
     auto value = std::make_pair(range, filename_str);
 
     rtree_ptr->remove(value);
