@@ -35,7 +35,9 @@
 #include <gdal.h>
 #include <cpl_vsi.h>
 
+#include "rtree.h"
 #include "../backend.h"
+
 
 static const char *device_name = "/blocks";
 
@@ -44,6 +46,7 @@ int64_t block_size;
 int readonly = 0;
 char *blockdir = NULL;
 const int PATHLEN = 0x1000;
+static int rtree_initialized = 0;
 
 
 #include "../common.h"
@@ -56,12 +59,25 @@ static void block_to_filename(uint64_t block_number, char *block_path)
     sprintf(block_path, "%s/0x%012lX", blockdir, block_number);
 }
 
+/*
+ * Convert starting and ending addresses of range into corresponding
+ * filename.
+ */
+static void addrs_to_filename(uint64_t start, uint64_t end, char *block_path)
+{
+  sprintf(block_path, "%s/%012lX_%012lX", blockdir, start, end);
+}
+
 int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     char block_path[PATHLEN];
     void *buffer_ptr = buf;
     int bytes_to_read = size;
     int current_offset = offset;
+
+    if (rtree_initialized && rtree_init()) {
+      rtree_initialized = 1;
+    }
 
     while (bytes_to_read > 0) {
         VSILFILE *handle = NULL;
@@ -103,76 +119,32 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
 int s3bd_write(const char *path, const char *buf, size_t size,
                off_t offset, struct fuse_file_info *fi)
 {
-    char block_path[PATHLEN];
-    const void *buffer_ptr = buf;
-    int bytes_to_write = size;
-    int current_offset = offset;
+    char addr_path[PATHLEN];
+    VSILFILE *handle = NULL;
+    uint64_t addr_start = offset;
+    uint64_t addr_end = offset + size - 1;
 
-    while (bytes_to_write > 0) {
-        VSILFILE *handle = NULL;
-        int64_t block_number = current_offset / block_size;
-        int64_t current_offset_in_block = current_offset - (block_size * block_number);
-        volatile int64_t bytes_wanted = // Compiler bug?
-            MIN(block_size - current_offset_in_block, bytes_to_write);
-        int64_t final_offset = current_offset_in_block + bytes_wanted;
-        int64_t bytes_at_end = block_size - final_offset;
-
-        block_to_filename(block_number, block_path);
-
-        /* Attempt to open the resource for writing. */
-        if ((handle = VSIFOpenL(block_path, "w")) == NULL) {
-            return -EIO;
-        }
-
-        /* Seeks are forbidden for at least one interesting VSI
-           backend (S3), so simulate seeking by reading and writing
-           bytes. */
-        if (current_offset_in_block != 0) {
-            uint8_t *bytes = calloc(1, current_offset_in_block);
-            VSILFILE *read_handle = VSIFOpenL(block_path, "r");
-
-            VSIFReadL(bytes, current_offset_in_block, 1, read_handle);
-            VSIFCloseL(read_handle);
-            if (VSIFWriteL(bytes, current_offset_in_block, 1, handle) != 1) {
-                free(bytes);
-                VSIFCloseL(handle);
-                return -EIO;
-            }
-            free(bytes);
-        }
-
-        /* Write the given bytes into the block. */
-        if (VSIFWriteL(buffer_ptr, bytes_wanted, 1, handle) != 1) {
-            VSIFCloseL(handle);
-            return -EIO;
-        }
-
-        /* Write the remaining bytes in the block. */
-        if (bytes_at_end > 0) {
-            uint8_t *bytes = calloc(1, bytes_at_end);
-            VSILFILE *read_handle = VSIFOpenL(block_path, "r");
-
-            VSIFSeekL(read_handle, final_offset, SEEK_SET);
-            VSIFReadL(bytes, bytes_at_end, 1, read_handle);
-            VSIFCloseL(read_handle);
-            if (VSIFWriteL(bytes, bytes_at_end, 1, handle) != 1) {
-                free(bytes);
-                VSIFCloseL(handle);
-                return -EIO;
-            }
-            free(bytes);
-        }
-
-        /* Close the resource. */
-        if (VSIFCloseL(handle) == -1) {
-            return -EIO;
-        }
-
-        /* State */
-        buffer_ptr += bytes_wanted;
-        current_offset += bytes_wanted;
-        bytes_to_write -= bytes_wanted;
+    // Ensure index has been initialized
+    if (rtree_initialized && rtree_init()) {
+        rtree_initialized = 1;
     }
+
+    addrs_to_filename(addr_start, addr_end, addr_path);
+
+    // Attempt to open the resource for writing
+    if ((handle = VSIFOpenL(addr_path, "w")) == NULL) {
+        return -EIO;
+    }
+
+    // Attempt to write bytes to file
+    if (VSIFWriteL(buf, size, 1, handle) != 1) {
+        VSIFCloseL(handle);
+        return -EIO;
+    }
+
+    // Note new range in index, close the resource
+    rtree_insert(addr_path, addr_start, addr_end);
+    VSIFCloseL(handle);
 
     return size;
 }
