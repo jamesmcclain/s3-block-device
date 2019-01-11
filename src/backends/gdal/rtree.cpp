@@ -29,6 +29,7 @@
 
 // https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples/index_stored_in_mapped_file_using_boost_interprocess.html
 // https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples.html
+// https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/reference/spatial_indexes/boost__geometry__index__rtree.html
 #include <boost/interprocess/managed_mapped_file.hpp>
 #include <boost/geometry.hpp>
 #include <boost/geometry/geometries/point.hpp>
@@ -94,13 +95,25 @@ extern "C" int rtree_size()
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_query(char **filenames, uint64_t start, uint64_t end)
+extern "C" int rtree_query(char **filenames, int max_results, uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
-    auto candidates = std::vector < value_t > ();
+    auto candidates = std::vector<value_t>();
+    auto cmp =[](value_t a, value_t b) {
+        auto a_start = a.first.min_corner().get<0>();
+        auto b_start = b.first.min_corner().get<0>();
+        return (a_start < b_start);
+    };
 
     rtree_ptr->query(intersects, std::back_inserter(candidates));
+    std::sort(candidates.begin(), candidates.end(), cmp);
 
-    return candidates.size();
+    int i = 0;
+    if (filenames != nullptr) {
+        for (auto itr = candidates.begin(); (itr != candidates.end()) && (i < max_results); ++itr)
+            filenames[i++] = strdup(itr->second.c_str());
+    }
+
+    return i;
 }

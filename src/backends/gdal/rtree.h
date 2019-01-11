@@ -37,7 +37,7 @@ extern "C" {
     int rtree_insert(const char *filename, uint64_t start, uint64_t end);
     int rtree_remove(const char *filename, uint64_t start, uint64_t end);
     int rtree_size();
-    int rtree_query(char **filenames, uint64_t start, uint64_t end);
+    int rtree_query(char **filenames, int max_results, uint64_t start, uint64_t end);
 
 #ifdef __cplusplus
 }
