@@ -1,7 +1,7 @@
 /*
  * The MIT License
  *
- * Copyright (c) 2019 James McClain
+ * Copyright (c) 2018-2019 James McClain
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,33 +22,41 @@
  * THE SOFTWARE.
  */
 
-#include <stdint.h>
+#ifndef __TIMED_STRING_HPP__
+#define __TIMED_STRING_HPP__
 
 
-#ifndef __RANGE_H__
-#define __RANGE_H__
+class timed_string_t {
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+private:
+  long _nanos;
+  std::string _filename;
 
-    struct file_interval {
-        char *filename;
-        uint8_t start_closed;
-        uint8_t end_closed;
-        uint64_t start;
-        uint64_t end;
-    };
+public:
+  timed_string_t(): _nanos(0), _filename("") {}
 
-    int rtree_init();
-    int rtree_deinit();
-    int rtree_insert(const char *filename, uint64_t start, uint64_t end, long nanos);
-    int rtree_remove(const char *filename, uint64_t start, uint64_t end, long nanos);
-    int rtree_size();
-    int rtree_query(struct file_interval **filenames, int max_results, uint64_t start,
-                    uint64_t end);
+  timed_string_t(long nanos, std::string filename): _nanos(nanos), _filename(filename) {}
 
-#ifdef __cplusplus
-}
-#endif
+  timed_string_t & operator+=(const timed_string_t rhs) {
+    if (_nanos < rhs._nanos) {
+      _nanos = rhs._nanos;
+      _filename = rhs._filename;
+    }
+    return *this;
+  }
+
+  bool operator==(timed_string_t rhs) const {
+    return (_nanos == rhs._nanos) && (_filename == rhs._filename);
+  }
+
+  long nanos() const {
+    return _nanos;
+  }
+
+  const std::string && filename () const {
+    return std::move(_filename);
+  }
+};
+
+
 #endif
