@@ -32,12 +32,19 @@
 extern "C" {
 #endif
 
+    struct file_interval {
+        char *filename;
+        uint64_t start;
+        uint64_t end;
+    };
+
     int rtree_init();
     int rtree_deinit();
     int rtree_insert(const char *filename, uint64_t start, uint64_t end);
     int rtree_remove(const char *filename, uint64_t start, uint64_t end);
     int rtree_size();
-    int rtree_query(char **filenames, int max_results, uint64_t start, uint64_t end);
+    int rtree_query(struct file_interval **filenames, int max_results, uint64_t start,
+                    uint64_t end);
 
 #ifdef __cplusplus
 }

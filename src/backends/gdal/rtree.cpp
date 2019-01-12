@@ -95,11 +95,12 @@ extern "C" int rtree_size()
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_query(char **filenames, int max_results, uint64_t start, uint64_t end)
+extern "C" int rtree_query(struct file_interval **filenames, int max_results, uint64_t start,
+                           uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
-    auto candidates = std::vector<value_t>();
+    auto candidates = std::vector <value_t>();
     auto cmp =[](value_t a, value_t b) {
         auto a_start = a.first.min_corner().get<0>();
         auto b_start = b.first.min_corner().get<0>();
@@ -111,8 +112,19 @@ extern "C" int rtree_query(char **filenames, int max_results, uint64_t start, ui
 
     int i = 0;
     if (filenames != nullptr) {
-        for (auto itr = candidates.begin(); (itr != candidates.end()) && (i < max_results); ++itr)
-            filenames[i++] = strdup(itr->second.c_str());
+        for (auto itr = candidates.begin(); (itr != candidates.end()) && (i < max_results); ++itr) {
+            struct file_interval *file_interval = nullptr;
+
+            file_interval =
+                static_cast<struct file_interval *>(malloc(sizeof(struct file_interval)));
+            if (file_interval == nullptr) {
+                exit(-1);
+            }
+            file_interval->filename = strdup(itr->second.second.c_str());
+            file_interval->start = itr->first.min_corner().get<0>();
+            file_interval->end = itr->first.max_corner().get<0>();
+            file_intervals[i++] = file_interval;
+        }
     }
 
     return i;
