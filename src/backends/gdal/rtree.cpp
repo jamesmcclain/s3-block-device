@@ -46,7 +46,7 @@ namespace bgi = boost::geometry::index;
 
 typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
 typedef bgm::box<point_t> range_t;
-typedef std::pair<range_t, std::string> value_t;
+typedef std::pair<range_t, std::pair<long, std::string>> value_t;
 typedef bgi::linear<16, 4> params_t;
 typedef bgi::indexable<value_t> indexable_t;
 typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
@@ -70,21 +70,21 @@ extern "C" int rtree_deinit()
     return 1;
 }
 
-extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end)
+extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end, long nanos)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto filename_str = std::string(filename);
-    auto value = std::make_pair(range, filename_str);
+    auto value = std::make_pair(range, std::make_pair(nanos, filename_str));
 
     rtree_ptr->insert(value);
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_remove(const char *filename, uint64_t start, uint64_t end)
+extern "C" int rtree_remove(const char *filename, uint64_t start, uint64_t end, long nanos)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto filename_str = std::string(filename);
-    auto value = std::make_pair(range, filename_str);
+    auto value = std::make_pair(range, std::make_pair(nanos, filename_str));
 
     rtree_ptr->remove(value);
     return rtree_ptr->size();
@@ -95,7 +95,7 @@ extern "C" int rtree_size()
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_query(struct file_interval **filenames, int max_results, uint64_t start,
+extern "C" int rtree_query(struct file_interval **file_intervals, int max_results, uint64_t start,
                            uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
@@ -111,7 +111,7 @@ extern "C" int rtree_query(struct file_interval **filenames, int max_results, ui
     std::sort(candidates.begin(), candidates.end(), cmp);
 
     int i = 0;
-    if (filenames != nullptr) {
+    if (file_intervals != nullptr) {
         for (auto itr = candidates.begin(); (itr != candidates.end()) && (i < max_results); ++itr) {
             struct file_interval *file_interval = nullptr;
 

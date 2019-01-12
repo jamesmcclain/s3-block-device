@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <string.h>
-
+#include <time.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -46,7 +46,9 @@ int64_t block_size;
 int readonly = 0;
 char *blockdir = NULL;
 const int PATHLEN = 0x1000;
+const int NUMFILES = 0x10000;
 static int rtree_initialized = 0;
+static struct file_interval **file_intervals = NULL;
 
 
 #include "../common.h"
@@ -63,9 +65,9 @@ static void block_to_filename(uint64_t block_number, char *block_path)
  * Convert starting and ending addresses of range into corresponding
  * filename.
  */
-static void addrs_to_filename(uint64_t start, uint64_t end, char *block_path)
+static void addrs_to_filename(uint64_t start, uint64_t end, long nanos, char *block_path)
 {
-  sprintf(block_path, "%s/%012lX_%012lX", blockdir, start, end);
+  sprintf(block_path, "%s/0x%012lX_0x%012lX_%ld", blockdir, start, end, nanos);
 }
 
 int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
@@ -76,7 +78,7 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
     int current_offset = offset;
 
     if (rtree_initialized && rtree_init()) {
-      rtree_initialized = 1;
+        rtree_initialized = 1;
     }
 
     while (bytes_to_read > 0) {
@@ -123,27 +125,30 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     VSILFILE *handle = NULL;
     uint64_t addr_start = offset;
     uint64_t addr_end = offset + size - 1;
+    long nanos;
+    struct timespec tp;
 
     // Ensure index has been initialized
     if (rtree_initialized && rtree_init()) {
         rtree_initialized = 1;
     }
 
-    addrs_to_filename(addr_start, addr_end, addr_path);
+    clock_gettime(CLOCK_MONOTONIC, &tp);
+    nanos = tp.tv_nsec;
+
+    addrs_to_filename(addr_start, addr_end, nanos, addr_path);
 
     // Attempt to open the resource for writing
     if ((handle = VSIFOpenL(addr_path, "w")) == NULL) {
         return -EIO;
     }
-
     // Attempt to write bytes to file
     if (VSIFWriteL(buf, size, 1, handle) != 1) {
         VSIFCloseL(handle);
         return -EIO;
     }
-
     // Note new range in index, close the resource
-    rtree_insert(addr_path, addr_start, addr_end);
+    rtree_insert(addr_path, addr_start, addr_end, nanos);
     VSIFCloseL(handle);
 
     return size;

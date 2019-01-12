@@ -40,8 +40,8 @@ extern "C" {
 
     int rtree_init();
     int rtree_deinit();
-    int rtree_insert(const char *filename, uint64_t start, uint64_t end);
-    int rtree_remove(const char *filename, uint64_t start, uint64_t end);
+    int rtree_insert(const char *filename, uint64_t start, uint64_t end, long nanos);
+    int rtree_remove(const char *filename, uint64_t start, uint64_t end, long nanos);
     int rtree_size();
     int rtree_query(struct file_interval **filenames, int max_results, uint64_t start,
                     uint64_t end);

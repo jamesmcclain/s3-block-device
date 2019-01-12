@@ -43,9 +43,9 @@ BOOST_AUTO_TEST_CASE(rtree_insert_remove_test)
 {
     rtree_init();
     BOOST_TEST(rtree_size() == 0);
-    rtree_insert("/tmp/a", 0, 1);
+    rtree_insert("/tmp/a", 0, 1, 0);
     BOOST_TEST(rtree_size() == 1);
-    rtree_remove("/tmp/a", 0, 1);
+    rtree_remove("/tmp/a", 0, 1, 0);
     BOOST_TEST(rtree_size() == 0);
     rtree_deinit();
 }
@@ -56,8 +56,8 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_size_test)
     struct file_interval *results[max_results];
 
     rtree_init();
-    rtree_insert("/tmp/a", 0, 5);
-    rtree_insert("/tmp/b", 4, 7);
+    rtree_insert("/tmp/a", 0, 5, 0);
+    rtree_insert("/tmp/b", 4, 7, 0);
 
     BOOST_TEST(rtree_query(results, max_results, 0, 3) == 1);
     free(results[0]->filename);
@@ -95,9 +95,9 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_sort_test)
     int num_results;
 
     rtree_init();
-    rtree_insert("/tmp/c", 8, 30);
-    rtree_insert("/tmp/a", 0, 7);
-    rtree_insert("/tmp/b", 7, 20);
+    rtree_insert("/tmp/c", 8, 30, 0);
+    rtree_insert("/tmp/a", 0, 7, 0);
+    rtree_insert("/tmp/b", 7, 20, 0);
 
     num_results = rtree_query(results, max_results, 8, 9);
     BOOST_TEST(num_results == 2);
