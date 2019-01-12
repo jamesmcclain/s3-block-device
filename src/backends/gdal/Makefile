@@ -11,7 +11,7 @@ all: libs3bd_gdal.so unit_tests
 	$(CC) $(CFLAGS) $< -fPIC `pkg-config gdal --cflags` `pkg-config fuse --cflags` -c -o $@
 
 libs3bd_gdal.so: callbacks.o rtree.o
-	$(CC) $(CFLAGS) $^ `pkg-config gdal --libs` -lstdc++ -shared -o $@
+	$(CC) $(CFLAGS) $^ `pkg-config gdal --libs` -lpthread -lstdc++ -shared -o $@
 
 unit_tests: unit_tests.o rtree.o
 	$(CC) $(CFLAGS) $^ -lm -lstdc++ -o $@
