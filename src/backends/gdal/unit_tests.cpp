@@ -54,37 +54,38 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_size_test)
 {
     const int max_results = 10;
     struct file_interval *results[max_results];
+    int num_results;
 
     rtree_init();
     rtree_insert("/tmp/a", 0, 5, 0);
     rtree_insert("/tmp/b", 4, 7, 1);
 
-    BOOST_TEST(rtree_query(results, max_results, 0, 3) == 1);
-    for (int i = 0; i < 1; ++i) {
+    BOOST_TEST((num_results = rtree_query(results, max_results, 0, 3)) == 1);
+    for (int i = 0; i < num_results; ++i) {
       free(results[i]->filename);
       free(results[i]);
     }
 
-    BOOST_TEST(rtree_query(results, max_results, 0, 4) == 2);
-    for (int i = 0; i < 2; ++i) {
+    BOOST_TEST((num_results = rtree_query(results, max_results, 0, 4)) == 2);
+    for (int i = 0; i < num_results; ++i) {
       free(results[i]->filename);
       free(results[i]);
     }
 
-    BOOST_TEST(rtree_query(results, max_results, 4, 5) == 2);
-    for (int i = 0; i < 2; ++i) {
+    BOOST_TEST((num_results = rtree_query(results, max_results, 4, 5)) == 1);
+    for (int i = 0; i < num_results; ++i) {
       free(results[i]->filename);
       free(results[i]);
     }
 
-    BOOST_TEST(rtree_query(results, max_results, 5, 7) == 1);
-    for (int i = 0; i < 1; ++i) {
+    BOOST_TEST((num_results = rtree_query(results, max_results, 5, 7)) == 1);
+    for (int i = 0; i < num_results; ++i) {
       free(results[i]->filename);
       free(results[i]);
     }
 
-    BOOST_TEST(rtree_query(results, max_results, 6, 7) == 1);
-    for (int i = 0; i < 1; ++i) {
+    BOOST_TEST((num_results = rtree_query(results, max_results, 6, 7)) == 1);
+    for (int i = 0; i < num_results; ++i) {
       free(results[i]->filename);
       free(results[i]);
     }
@@ -109,7 +110,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
 
     num_results = rtree_query(results, max_results, 3, 4);
     BOOST_TEST(num_results == 1);
-    for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < num_results; ++i) {
         BOOST_TEST(results[i]->filename == expected1[i].filename);
         BOOST_TEST(results[i]->start_closed == expected1[i].start_closed);
         BOOST_TEST(results[i]->end_closed == expected1[i].end_closed);
@@ -127,7 +128,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
 
     num_results = rtree_query(results, max_results, 0, 3);
     BOOST_TEST(num_results == 3);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < num_results; ++i) {
         BOOST_TEST(results[i]->filename == expected2[i].filename);
         BOOST_TEST(results[i]->start_closed == expected2[i].start_closed);
         BOOST_TEST(results[i]->end_closed == expected2[i].end_closed);
@@ -158,7 +159,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
 
     num_results = rtree_query(results, max_results, 3, 4);
     BOOST_TEST(num_results == 2);
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < num_results; ++i) {
         BOOST_TEST(results[i]->filename == expected1[i].filename);
         BOOST_TEST(results[i]->start_closed == expected1[i].start_closed);
         BOOST_TEST(results[i]->end_closed == expected1[i].end_closed);
@@ -176,7 +177,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
 
     num_results = rtree_query(results, max_results, 0, 4);
     BOOST_TEST(num_results == 3);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < num_results; ++i) {
         BOOST_TEST(results[i]->filename == expected2[i].filename);
         BOOST_TEST(results[i]->start_closed == expected2[i].start_closed);
         BOOST_TEST(results[i]->end_closed == expected2[i].end_closed);
@@ -187,14 +188,12 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
     }
 
 #pragma GCC diagnostic ignored "-Wwrite-strings"
-    struct file_interval expected3[] = { {.filename = "/tmp/a", .start_closed = 0, .end_closed = 0, .start = 1, .end = 1},
-                                         {.filename = "/tmp/b", .start_closed = 1, .end_closed = 1, .start = 1, .end = 3},
-                                         {.filename = "/tmp/c", .start_closed = 0, .end_closed = 0, .start = 3, .end = 3} } ;
+    struct file_interval expected3[] = { {.filename = "/tmp/b", .start_closed = 1, .end_closed = 1, .start = 1, .end = 3} } ;
 #pragma GCC diagnostic pop
 
     num_results = rtree_query(results, max_results, 1, 3);
-    BOOST_TEST(num_results == 3);
-    for (int i = 0; i < 3; ++i) {
+    BOOST_TEST(num_results == 1);
+    for (int i = 0; i < num_results; ++i) {
         BOOST_TEST(results[i]->filename == expected3[i].filename);
         BOOST_TEST(results[i]->start_closed == expected3[i].start_closed);
         BOOST_TEST(results[i]->end_closed == expected3[i].end_closed);

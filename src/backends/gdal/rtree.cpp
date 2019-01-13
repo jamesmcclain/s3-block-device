@@ -104,8 +104,8 @@ extern "C" int rtree_size()
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_query(struct file_interval **file_intervals, int max_results, uint64_t start,
-                           uint64_t end)
+extern "C" int rtree_query(struct file_interval **file_intervals, int max_results,
+                           uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
@@ -143,10 +143,15 @@ extern "C" int rtree_query(struct file_interval **file_intervals, int max_result
 
                 file_interval->start = addr_start;
                 file_interval->end = addr_end;
-                file_interval->filename = strdup(timed_interval.filename().c_str());
                 file_interval->start_closed = icl::contains(interval, addr_start);
                 file_interval->end_closed = icl::contains(interval, addr_end);
-                file_intervals[i++] = file_interval;
+                if ((addr_end - addr_start < 2) && !file_interval->start_closed
+                    && !file_interval->end_closed) {
+                    free(file_interval);
+                } else {
+                    file_interval->filename = strdup(timed_interval.filename().c_str());
+                    file_intervals[i++] = file_interval;
+                }
             }
         }
     }
