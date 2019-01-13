@@ -30,7 +30,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <pthread.h>
 
 #include <gdal.h>
 #include <cpl_vsi.h>
@@ -48,8 +47,7 @@ char *blockdir = NULL;
 const int PATHLEN = 0x1000;
 const int NUMFILES = 0x100;
 static int rtree_initialized = 0;
-static long _nanos = 0;
-static pthread_mutex_t gdal_mutex = PTHREAD_MUTEX_INITIALIZER;
+static long _serial_number = 0;
 
 
 #include "../common.h"
@@ -67,12 +65,13 @@ static uint64_t filename_to_addr(const char * block_path)
   return start;
 }
 
-void deallocate_intervals(struct file_interval ** file_intervals, int num_intervals) {
-  for (int i = 0; i < num_intervals; ++i) {
-    free(file_intervals[i]->filename);
-    free(file_intervals[i]);
-  }
-  free(file_intervals);
+void deallocate_intervals(struct file_interval **file_intervals, int num_intervals)
+{
+    for (int i = 0; i < num_intervals; ++i) {
+        free(file_intervals[i]->filename);
+        free(file_intervals[i]);
+    }
+    free(file_intervals);
 }
 
 int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
@@ -82,16 +81,12 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
     uint64_t addr_end = offset + size - 1;      // closed interval
     struct file_interval **file_intervals = NULL;
 
-    pthread_mutex_lock(&gdal_mutex);
     // Ensure that index has been initialized
     if (rtree_initialized || rtree_init()) {
         rtree_initialized = 1;
     }
 
-    // Ensure that interval list has been initialized
-    if (file_intervals == NULL) {
-        file_intervals = malloc(sizeof(struct file_interval) * NUMFILES);
-    }
+    file_intervals = malloc(sizeof(struct file_interval) * NUMFILES);
 
     // Get paths covering this range
     num_files = rtree_query(file_intervals, NUMFILES, addr_start, addr_end);
@@ -108,7 +103,6 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
         if ((handle = VSIFOpenL(file_interval->filename, "r")) == NULL) {
             VSIFCloseL(handle);
             deallocate_intervals(file_intervals, num_files);
-            pthread_mutex_unlock(&gdal_mutex);
             return -EIO;
         } else {
             uint64_t file_start_offset = filename_to_addr(file_interval->filename);
@@ -119,16 +113,13 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
             uint64_t bytes_to_skip_in_file = range_start_offset - file_start_offset;
             uint64_t bytes_to_skip_in_buffer = range_start_offset - offset;
 
-            fprintf(stderr, "XXX %s %ld %ld %ld %ld %ld %ld\n", file_interval->filename, file_start_offset, range_start_offset, range_end_offset, bytes_wanted, bytes_to_skip_in_file, bytes_to_skip_in_buffer);
             if (VSIFSeekL(handle, bytes_to_skip_in_file, SEEK_SET) == -1) {
                 VSIFCloseL(handle);
                 deallocate_intervals(file_intervals, num_files);
-                pthread_mutex_unlock(&gdal_mutex);
                 return -EIO;
             } else if (VSIFReadL(buf + bytes_to_skip_in_buffer, bytes_wanted, 1, handle) != 1) {
                 VSIFCloseL(handle);
                 deallocate_intervals(file_intervals, num_files);
-                pthread_mutex_unlock(&gdal_mutex);
                 return -EIO;
             } else {
                 VSIFCloseL(handle);
@@ -137,7 +128,7 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
     }
 
     deallocate_intervals(file_intervals, num_files);
-    pthread_mutex_unlock(&gdal_mutex);
+
     return size;
 }
 
@@ -148,16 +139,14 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     VSILFILE *handle = NULL;
     uint64_t addr_start = offset;
     uint64_t addr_end = offset + size - 1; // closed interval
-    long nanos;
+    long serial_number = ++_serial_number;
 
     // Ensure that index has been initialized
     if (rtree_initialized || rtree_init()) {
         rtree_initialized = 1;
     }
 
-    nanos = _nanos++;
-
-    addrs_to_filename(addr_start, addr_end, nanos, addr_path);
+    addrs_to_filename(addr_start, addr_end, serial_number, addr_path);
 
     // Attempt to open the resource for writing
     if ((handle = VSIFOpenL(addr_path, "w")) == NULL) {
@@ -169,7 +158,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
         return -EIO;
     }
     // Note new range in index, close the resource
-    rtree_insert(addr_path, addr_start, addr_end, nanos);
+    rtree_insert(addr_path, addr_start, addr_end, serial_number);
     VSIFCloseL(handle);
 
     return size;
