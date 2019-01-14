@@ -200,6 +200,8 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
             while (VSIFReadL(&bre, sizeof(bre), 1, handle) == 1) {
                 addrs_to_filename(bre.start, bre.end, bre.serial_number, addr_path);
                 rtree_insert(addr_path, bre.start, bre.end, bre.serial_number);
+                _serial_number =
+                    _serial_number < bre.serial_number ? bre.serial_number : _serial_number;
             }
             VSIFCloseL(handle);
         }
