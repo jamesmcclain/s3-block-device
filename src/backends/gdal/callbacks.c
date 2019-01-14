@@ -55,7 +55,9 @@ static pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 #define NO_S3BD_OPEN
+#define NO_S3BD_FLUSH
 #include "../common.h"
+#undef NO_S3BD_FLUSH
 #undef NO_S3BD_OPEN
 
 static void addrs_to_filename(uint64_t start, uint64_t end, long nanos, char *block_path)
@@ -167,6 +169,9 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     if (VSIFWriteL(&bre, sizeof(bre), 1, list_handle) != 1) {
         pthread_mutex_unlock(&list_mutex);
         return -EIO;
+    } else if (VSIFFlushL(list_handle) != 0) {
+        pthread_mutex_unlock(&list_mutex);
+        return -EIO;
     }
     pthread_mutex_unlock(&list_mutex);
 
@@ -212,6 +217,19 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
             return -EIO;
         }
     }
+    pthread_mutex_unlock(&list_mutex);
+
+    return 0;
+}
+
+int s3bd_flush(const char *path, struct fuse_file_info *fi)
+{
+    char list_path[PATHLEN];
+    sprintf(list_path, "%s/LIST", blockdir);
+
+    pthread_mutex_lock(&list_mutex);
+    VSIFCloseL(list_handle);
+    list_handle = VSIFOpenL(list_path, "a");
     pthread_mutex_unlock(&list_mutex);
 
     return 0;
