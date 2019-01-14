@@ -30,6 +30,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #include <gdal.h>
 #include <cpl_vsi.h>
@@ -44,25 +45,35 @@ int64_t device_size;
 int64_t block_size;
 int readonly = 0;
 char *blockdir = NULL;
-const int PATHLEN = 0x1000;
+const int PATHLEN = 0x100;
 const int NUMFILES = 0x100;
 static int rtree_initialized = 0;
 static long _serial_number = 0;
+static VSILFILE *list_handle = NULL;
+static pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct block_range_entry {
+    uint64_t start;
+    uint64_t end;
+    long serial_number;
+};
 
 
+#define NO_S3BD_OPEN
 #include "../common.h"
+#undef NO_S3BD_OPEN
 
 static void addrs_to_filename(uint64_t start, uint64_t end, long nanos, char *block_path)
 {
-  sprintf(block_path, "%s/0x%012lX_0x%012lX_%ld", blockdir, start, end, nanos);
+    sprintf(block_path, "%s/0x%012lX_0x%012lX_%ld", blockdir, start, end, nanos);
 }
 
-static uint64_t filename_to_addr(const char * block_path)
+static uint64_t filename_to_addr(const char *block_path)
 {
-  uint64_t start;
-  char * location = strstr(block_path, "0x");
-  sscanf(location + 2, "%012lX", &start);
-  return start;
+    uint64_t start;
+    char *location = strstr(block_path, "0x");
+    sscanf(location + 2, "%012lX", &start);
+    return start;
 }
 
 void deallocate_intervals(struct file_interval **file_intervals, int num_intervals)
@@ -80,11 +91,6 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
     uint64_t addr_start = offset;
     uint64_t addr_end = offset + size - 1;      // closed interval
     struct file_interval **file_intervals = NULL;
-
-    // Ensure that index has been initialized
-    if (rtree_initialized || rtree_init()) {
-        rtree_initialized = 1;
-    }
 
     file_intervals = malloc(sizeof(struct file_interval) * NUMFILES);
 
@@ -138,28 +144,78 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     char addr_path[PATHLEN];
     VSILFILE *handle = NULL;
     uint64_t addr_start = offset;
-    uint64_t addr_end = offset + size - 1; // closed interval
+    uint64_t addr_end = offset + size - 1;      // closed interval
     long serial_number = ++_serial_number;
-
-    // Ensure that index has been initialized
-    if (rtree_initialized || rtree_init()) {
-        rtree_initialized = 1;
-    }
+    struct block_range_entry bre;
 
     addrs_to_filename(addr_start, addr_end, serial_number, addr_path);
 
-    // Attempt to open the resource for writing
+    // Attempt to open the resource for writing, thekn attempt to
+    // write bytes into the file.
     if ((handle = VSIFOpenL(addr_path, "w")) == NULL) {
         return -EIO;
-    }
-    // Attempt to write bytes to file
-    if (VSIFWriteL(buf, size, 1, handle) != 1) {
+    } else if (VSIFWriteL(buf, size, 1, handle) != 1) {
         VSIFCloseL(handle);
         return -EIO;
+    } else {
+        VSIFCloseL(handle);
     }
-    // Note new range in index, close the resource
+
+    // Make note of the new block range in the index
     rtree_insert(addr_path, addr_start, addr_end, serial_number);
-    VSIFCloseL(handle);
+
+    // Make note of the new block range in the persistent list
+    pthread_mutex_lock(&list_mutex);
+    bre.start = addr_start;
+    bre.end = addr_end;
+    bre.serial_number = serial_number;
+    if (VSIFWriteL(&bre, sizeof(bre), 1, list_handle) != 1) {
+        pthread_mutex_unlock(&list_mutex);
+        return -EIO;
+    }
+    pthread_mutex_unlock(&list_mutex);
 
     return size;
+}
+
+int s3bd_open(const char *path, struct fuse_file_info *fi)
+{
+    char list_path[PATHLEN];
+
+    if (strcmp(path, device_name))
+        return -ENOENT;
+
+    // Construct the path to the list of block range entries
+    sprintf(list_path, "%s/LIST", blockdir);
+
+    // If the R-tree has not been initialized, do so
+    if (!rtree_initialized) {
+        char addr_path[PATHLEN];
+        struct block_range_entry bre;
+        VSILFILE *handle = NULL;
+
+        rtree_init();
+        handle = VSIFOpenL(list_path, "r");
+        if (handle != NULL) {
+            while (VSIFReadL(&bre, sizeof(bre), 1, handle) == 1) {
+                addrs_to_filename(bre.start, bre.end, bre.serial_number, addr_path);
+                rtree_insert(addr_path, bre.start, bre.end, bre.serial_number);
+            }
+            VSIFCloseL(handle);
+        }
+        rtree_initialized = 1;
+    }
+    // If the append-only handle to the list of entries is not open,
+    // open it.
+    pthread_mutex_lock(&list_mutex);
+    if (list_handle == NULL) {
+        if ((list_handle = VSIFOpenL(list_path, "a")) == NULL) {
+            VSIFCloseL(list_handle);
+            pthread_mutex_unlock(&list_mutex);
+            return -EIO;
+        }
+    }
+    pthread_mutex_unlock(&list_mutex);
+
+    return 0;
 }
