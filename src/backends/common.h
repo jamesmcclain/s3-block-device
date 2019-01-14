@@ -51,6 +51,7 @@ int s3bd_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
+#ifndef NO_S3BD_OPEN
 int s3bd_open(const char *path, struct fuse_file_info *fi)
 {
     if (strcmp(path, device_name))
@@ -58,6 +59,7 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
 
     return 0;
 }
+#endif
 
 int s3bd_flush(const char *path, struct fuse_file_info *fi)
 {
