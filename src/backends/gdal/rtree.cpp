@@ -42,6 +42,7 @@
 
 #include "rtree.h"
 #include "timed_string.hpp"
+#include "block_range_entry.h"
 
 
 // R-tree

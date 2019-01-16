@@ -36,6 +36,7 @@
 #include <cpl_vsi.h>
 
 #include "rtree.h"
+#include "block_range_entry.h"
 #include "../backend.h"
 
 
@@ -51,12 +52,6 @@ static int rtree_initialized = 0;
 static long _serial_number = 0;
 static VSILFILE *list_handle = NULL;
 static pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-struct block_range_entry {
-    uint64_t start;
-    uint64_t end;
-    long serial_number;
-};
 
 
 #define NO_S3BD_OPEN
