@@ -1,6 +1,7 @@
 CFLAGS ?= -Wall -O0 -ggdb3
 BOOST_ROOT ?= /usr/include
 
+
 all: libs3bd_gdal.so unit_tests
 	unit_tests
 
@@ -14,7 +15,7 @@ libs3bd_gdal.so: callbacks.o rtree.o block_range_entry.o
 	$(CC) $(CFLAGS) $^ `pkg-config gdal --libs` -lpthread -lstdc++ -shared -o $@
 
 unit_tests: unit_tests.o rtree.o block_range_entry.o
-	$(CC) $(CFLAGS) $^ -lm -lstdc++ -o $@
+	$(CC) $(CFLAGS) $^ -lm -lpthread -lstdc++ -o $@
 
 clean:
 	rm -f *.o

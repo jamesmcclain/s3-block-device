@@ -40,6 +40,7 @@ extern "C" {
     int rtree_size();
     int rtree_query(struct block_range_entry_part **filenames, int max_results,
                     uint64_t start, uint64_t end);
+    uint64_t rtree_dump(struct block_range_entry **entries);
 
 #ifdef __cplusplus
 }

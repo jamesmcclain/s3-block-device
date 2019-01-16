@@ -27,6 +27,7 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <pthread.h>
 
 // https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples/index_stored_in_mapped_file_using_boost_interprocess.html
 // https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples.html
@@ -62,6 +63,7 @@ typedef icl::interval_map<uint64_t, block_range_entry> file_map_t;
 typedef icl::interval<uint64_t> addr_interval_t;
 
 rtree_t *rtree_ptr = nullptr;
+pthread_rwlock_t rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 
 extern "C" int rtree_init()
@@ -157,4 +159,18 @@ extern "C" int rtree_query(struct block_range_entry_part **block_range_entry_par
     }
 
     return i;
+}
+
+extern "C" uint64_t rtree_dump(block_range_entry **entries)
+{
+    uint64_t n, i;
+
+    pthread_rwlock_rdlock(&rtree_lock);
+    n = i = static_cast<uint64_t>(rtree_ptr->size());
+    *entries = static_cast<block_range_entry *>(malloc(sizeof(block_range_entry) * n));
+    for (auto itr = rtree_ptr->begin(); itr != rtree_ptr->end(); ++itr) {
+        (*entries)[--i] = itr->second;
+    }
+    pthread_rwlock_unlock(&rtree_lock);
+    return n;
 }
