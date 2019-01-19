@@ -23,6 +23,7 @@
  */
 
 #include <stdint.h>
+#include "block_range_entry.h"
 
 
 #ifndef __RANGE_H__
@@ -32,20 +33,12 @@
 extern "C" {
 #endif
 
-    struct file_interval {
-        char *filename;
-        uint8_t start_closed;
-        uint8_t end_closed;
-        uint64_t start;
-        uint64_t end;
-    };
-
     int rtree_init();
     int rtree_deinit();
-    int rtree_insert(const char *filename, uint64_t start, uint64_t end, long nanos);
-    int rtree_remove(const char *filename, uint64_t start, uint64_t end, long nanos);
+    int rtree_insert(uint64_t start, uint64_t end, long nanos);
+    int rtree_remove(uint64_t start, uint64_t end, long nanos);
     int rtree_size();
-    int rtree_query(struct file_interval **filenames, int max_results,
+    int rtree_query(struct block_range_entry_part **filenames, int max_results,
                     uint64_t start, uint64_t end);
 
 #ifdef __cplusplus

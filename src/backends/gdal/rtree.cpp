@@ -41,7 +41,6 @@
 #include <boost/icl/split_interval_map.hpp>
 
 #include "rtree.h"
-#include "timed_string.hpp"
 #include "block_range_entry.h"
 
 
@@ -52,14 +51,14 @@ namespace bgm = boost::geometry::model;
 namespace bgi = boost::geometry::index;
 typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
 typedef bgm::box<point_t> range_t;
-typedef std::pair<range_t, timed_string_t> value_t;
+typedef std::pair<range_t, block_range_entry> value_t;
 typedef bgi::linear<16, 4> params_t;
 typedef bgi::indexable<value_t> indexable_t;
 typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
 
 // Intervals
 namespace icl = boost::icl;
-typedef icl::interval_map<uint64_t, timed_string_t> file_map_t;
+typedef icl::interval_map<uint64_t, block_range_entry> file_map_t;
 typedef icl::interval<uint64_t> addr_interval_t;
 
 rtree_t *rtree_ptr = nullptr;
@@ -80,21 +79,21 @@ extern "C" int rtree_deinit()
     return 1;
 }
 
-extern "C" int rtree_insert(const char *filename, uint64_t start, uint64_t end, long nanos)
+extern "C" int rtree_insert(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto filename_str = std::string(filename);
-    auto value = std::make_pair(range, timed_string_t(nanos, filename_str));
+    auto bre = block_range_entry(start, end, sn);
+    auto value = std::make_pair(range, bre);
 
     rtree_ptr->insert(value);
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_remove(const char *filename, uint64_t start, uint64_t end, long nanos)
+extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto filename_str = std::string(filename);
-    auto value = std::make_pair(range, timed_string_t(nanos, filename_str));
+    auto bre = block_range_entry(start, end, sn);
+    auto value = std::make_pair(range, bre);
 
     rtree_ptr->remove(value);
     return rtree_ptr->size();
@@ -105,7 +104,7 @@ extern "C" int rtree_size()
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_query(struct file_interval **file_intervals, int max_results,
+extern "C" int rtree_query(struct block_range_entry_part **block_range_entry_parts, int max_results,
                            uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
@@ -116,7 +115,7 @@ extern "C" int rtree_query(struct file_interval **file_intervals, int max_result
     rtree_ptr->query(intersects, std::back_inserter(candidates));
 
     int i = 0;
-    if (file_intervals != nullptr) {
+    if (block_range_entry_parts != nullptr) {
 
         for (auto itr = candidates.begin(); (itr != candidates.end()) && (i < max_results); ++itr) {
             uint64_t addr_start = itr->first.min_corner().get<0>();
@@ -128,30 +127,30 @@ extern "C" int rtree_query(struct file_interval **file_intervals, int max_result
         }
 
         for (auto itr = file_map.begin(); itr != file_map.end(); ++itr) {
-            struct file_interval *file_interval = nullptr;
+            block_range_entry_part *block_range_entry_part = nullptr;
             uint64_t addr_start = std::max(itr->first.lower(), start);
             uint64_t addr_end = std::min(itr->first.upper(), end);
-            auto interval = itr->first;
-            auto timed_interval = itr->second;
+            auto boost_interval = itr->first;
+            auto entry = itr->second;
 
             if (addr_start <= addr_end) {
 
-                file_interval =
-                    static_cast<struct file_interval *>(malloc(sizeof(struct file_interval)));
-                if (file_interval == nullptr) {
+                block_range_entry_part =
+                    static_cast<struct block_range_entry_part *>(malloc(sizeof(struct block_range_entry_part)));
+                if (block_range_entry_part == nullptr) {
                     exit(-1);
                 }
 
-                file_interval->start = addr_start;
-                file_interval->end = addr_end;
-                file_interval->start_closed = icl::contains(interval, addr_start);
-                file_interval->end_closed = icl::contains(interval, addr_end);
-                if ((addr_end - addr_start < 2) && !file_interval->start_closed
-                    && !file_interval->end_closed) {
-                    free(file_interval);
+                block_range_entry_part->start = addr_start;
+                block_range_entry_part->end = addr_end;
+                block_range_entry_part->start_closed = icl::contains(boost_interval, addr_start);
+                block_range_entry_part->end_closed = icl::contains(boost_interval, addr_end);
+                if ((addr_end - addr_start < 2) && !block_range_entry_part->start_closed
+                    && !block_range_entry_part->end_closed) {
+                    free(block_range_entry_part);
                 } else {
-                    file_interval->filename = strdup(timed_interval.filename().c_str());
-                    file_intervals[i++] = file_interval;
+                    block_range_entry_part->entry = block_range_entry(entry);
+                    block_range_entry_parts[i++] = block_range_entry_part;
                 }
             }
         }

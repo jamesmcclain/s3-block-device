@@ -1,7 +1,7 @@
 /*
  * The MIT License
  *
- * Copyright (c) 2018 James McClain
+ * Copyright (c) 2019 James McClain
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,11 @@
  * THE SOFTWARE.
  */
 
+#include <stdint.h>
+#ifdef __cplusplus
+#include <iostream>
+#endif
+
 #ifndef __BLOCK_RANGE_ENTRY_H__
 #define __BLOCK_RANGE_ENTRY_H__
 
@@ -29,6 +34,37 @@ struct block_range_entry {
     uint64_t start;
     uint64_t end;
     long serial_number;
+
+#ifdef __cplusplus
+    block_range_entry();
+    block_range_entry(uint64_t _start, uint64_t _end, long _sn);
+    block_range_entry(const block_range_entry & rhs);
+    block_range_entry & operator=(const block_range_entry & rhs);
+    block_range_entry & operator+=(const block_range_entry & rhs);
+
+    friend std::ostream & operator<<(std::ostream &out, const block_range_entry & entry);
+#endif
 };
+
+struct block_range_entry_part {
+    struct block_range_entry entry;
+    uint8_t start_closed;
+    uint8_t end_closed;
+    uint64_t start;
+    uint64_t end;
+
+#ifdef __cplusplus
+    block_range_entry_part(const block_range_entry & entry,
+                           bool start_closed, bool end_closed,
+                           uint64_t start, uint64_t end);
+
+    friend std::ostream & operator<<(std::ostream &out, const block_range_entry_part & entry_part);
+#endif
+};
+
+#ifdef __cplusplus
+bool operator==(const block_range_entry & lhs, const block_range_entry & rhs);
+bool operator==(const block_range_entry_part & lhs, const block_range_entry_part & rhs);
+#endif
 
 #endif
