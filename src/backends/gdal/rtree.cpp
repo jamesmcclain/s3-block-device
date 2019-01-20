@@ -62,8 +62,8 @@ namespace icl = boost::icl;
 typedef icl::interval_map<uint64_t, block_range_entry> file_map_t;
 typedef icl::interval<uint64_t> addr_interval_t;
 
-rtree_t *rtree_ptr = nullptr;
-pthread_rwlock_t rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
+static rtree_t *rtree_ptr = nullptr;
+static pthread_rwlock_t rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 
 extern "C" int rtree_init()
@@ -84,76 +84,78 @@ extern "C" int rtree_deinit()
 extern "C" int rtree_insert(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto bre = block_range_entry(start, end, sn);
-    auto value = std::make_pair(range, bre);
+    auto entry = block_range_entry(start, end, sn);
+    auto value = std::make_pair(range, entry);
 
+    pthread_rwlock_wrlock(&rtree_lock);
     rtree_ptr->insert(value);
+    pthread_rwlock_unlock(&rtree_lock);
     return rtree_ptr->size();
 }
 
 extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto bre = block_range_entry(start, end, sn);
-    auto value = std::make_pair(range, bre);
+    auto entry = block_range_entry(start, end, sn);
+    auto value = std::make_pair(range, entry);
 
+    pthread_rwlock_wrlock(&rtree_lock);
     rtree_ptr->remove(value);
+    pthread_rwlock_unlock(&rtree_lock);
     return rtree_ptr->size();
 }
 
-extern "C" int rtree_size()
+extern "C" uint64_t rtree_size()
 {
-    return rtree_ptr->size();
+    return static_cast<uint64_t>(rtree_ptr->size());
 }
 
-extern "C" int rtree_query(struct block_range_entry_part **block_range_entry_parts, int max_results,
-                           uint64_t start, uint64_t end)
+extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
-    auto candidates = std::vector<value_t>();
+    auto candidates = std::vector < value_t > ();
     file_map_t file_map;
 
+    pthread_rwlock_rdlock(&rtree_lock);
     rtree_ptr->query(intersects, std::back_inserter(candidates));
+    pthread_rwlock_unlock(&rtree_lock);
 
+    // Insert results from the R-tree query into the interval map
+    for (auto itr = candidates.begin(); itr != candidates.end(); ++itr) {
+        uint64_t interval_start = itr->first.min_corner().get<0>();
+        uint64_t interval_end = itr->first.max_corner().get<0>();
+        auto addr_interval = addr_interval_t::closed(interval_start, interval_end);
+        auto pair = std::make_pair(addr_interval, itr->second);
+
+        file_map += pair;
+    }
+
+    // Allocate the return array
+    *parts =
+        static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
+    if (*parts == nullptr) {
+      *(int *)0 = 42;
+      exit(-1);
+    }
+
+    // Copy resulting intervals into the return array
     int i = 0;
-    if (block_range_entry_parts != nullptr) {
+    for (auto itr = file_map.begin(); itr != file_map.end(); ++itr) {
+        auto addr_interval = itr->first;
+        uint64_t interval_start = std::max(addr_interval.lower(), start);
+        uint64_t interval_end = std::min(addr_interval.upper(), end);
+        bool interval_start_closed = icl::contains(addr_interval, interval_start);
+        bool interval_end_closed = icl::contains(addr_interval, interval_end);
+        auto entry = itr->second;
 
-        for (auto itr = candidates.begin(); (itr != candidates.end()) && (i < max_results); ++itr) {
-            uint64_t addr_start = itr->first.min_corner().get<0>();
-            uint64_t addr_end = itr->first.max_corner().get<0>();
-            auto addr_interval = addr_interval_t::closed(addr_start, addr_end);
-            auto pair = std::make_pair(addr_interval, itr->second);
-
-            file_map += pair;
-        }
-
-        for (auto itr = file_map.begin(); itr != file_map.end(); ++itr) {
-            block_range_entry_part *block_range_entry_part = nullptr;
-            uint64_t addr_start = std::max(itr->first.lower(), start);
-            uint64_t addr_end = std::min(itr->first.upper(), end);
-            auto boost_interval = itr->first;
-            auto entry = itr->second;
-
-            if (addr_start <= addr_end) {
-
-                block_range_entry_part =
-                    static_cast<struct block_range_entry_part *>(malloc(sizeof(struct block_range_entry_part)));
-                if (block_range_entry_part == nullptr) {
-                    exit(-1);
-                }
-
-                block_range_entry_part->start = addr_start;
-                block_range_entry_part->end = addr_end;
-                block_range_entry_part->start_closed = icl::contains(boost_interval, addr_start);
-                block_range_entry_part->end_closed = icl::contains(boost_interval, addr_end);
-                if ((addr_end - addr_start < 2) && !block_range_entry_part->start_closed
-                    && !block_range_entry_part->end_closed) {
-                    free(block_range_entry_part);
-                } else {
-                    block_range_entry_part->entry = block_range_entry(entry);
-                    block_range_entry_parts[i++] = block_range_entry_part;
-                }
+        if (interval_start <= interval_end) {
+            if ((interval_end - interval_start >= 2) || interval_start_closed || interval_end_closed) {
+                auto part =
+                    block_range_entry_part(entry,
+                                           interval_start_closed, interval_end_closed,
+                                           interval_start, interval_end);
+                (*parts)[i++] = part;
             }
         }
     }

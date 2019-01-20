@@ -68,10 +68,12 @@ int s3bd_flush(const char *path, struct fuse_file_info *fi)
 }
 #endif
 
+#ifndef NO_S3BD_FSYNC
 int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
     return 0;
 }
+#endif
 
 int s3bd_getxattr(const char *path, const char *name, char *value, size_t size)
 {
