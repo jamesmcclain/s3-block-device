@@ -42,166 +42,113 @@ BOOST_AUTO_TEST_CASE(rtree_deinit_test)
 BOOST_AUTO_TEST_CASE(rtree_insert_remove_test)
 {
     rtree_init();
-    BOOST_TEST(rtree_size() == 0);
-    rtree_insert("/tmp/a", 0, 1, 0);
-    BOOST_TEST(rtree_size() == 1);
-    rtree_remove("/tmp/a", 0, 1, 0);
-    BOOST_TEST(rtree_size() == 0);
+    BOOST_TEST(rtree_size() == 0u);
+    rtree_insert(0, 1, 0);
+    BOOST_TEST(rtree_size() == 1u);
+    rtree_remove(0, 1, 0);
+    BOOST_TEST(rtree_size() == 0u);
     rtree_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(rtree_query_result_size_test)
 {
-    const int max_results = 10;
-    struct file_interval *results[max_results];
+    block_range_entry_part *results;
     int num_results;
 
     rtree_init();
-    rtree_insert("/tmp/a", 0, 5, 0);
-    rtree_insert("/tmp/b", 4, 7, 1);
+    rtree_insert(0, 5, 0);
+    rtree_insert(4, 7, 1);
 
-    BOOST_TEST((num_results = rtree_query(results, max_results, 0, 3)) == 1);
-    for (int i = 0; i < num_results; ++i) {
-      free(results[i]->filename);
-      free(results[i]);
-    }
+    BOOST_TEST((num_results = rtree_query(&results, 0, 3)) == 1);
+    free(results);
 
-    BOOST_TEST((num_results = rtree_query(results, max_results, 0, 4)) == 2);
-    for (int i = 0; i < num_results; ++i) {
-      free(results[i]->filename);
-      free(results[i]);
-    }
+    BOOST_TEST((num_results = rtree_query(&results, 0, 4)) == 2);
+    free(results);
 
-    BOOST_TEST((num_results = rtree_query(results, max_results, 4, 5)) == 1);
-    for (int i = 0; i < num_results; ++i) {
-      free(results[i]->filename);
-      free(results[i]);
-    }
+    BOOST_TEST((num_results = rtree_query(&results, 4, 5)) == 1);
+    free(results);
 
-    BOOST_TEST((num_results = rtree_query(results, max_results, 5, 7)) == 1);
-    for (int i = 0; i < num_results; ++i) {
-      free(results[i]->filename);
-      free(results[i]);
-    }
+    BOOST_TEST((num_results = rtree_query(&results, 5, 7)) == 1);
+    free(results);
 
-    BOOST_TEST((num_results = rtree_query(results, max_results, 6, 7)) == 1);
-    for (int i = 0; i < num_results; ++i) {
-      free(results[i]->filename);
-      free(results[i]);
-    }
+    BOOST_TEST((num_results = rtree_query(&results, 6, 7)) == 1);
+    free(results);
 
     rtree_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
 {
-    const int max_results = 10;
-    struct file_interval *results[max_results];
+    struct block_range_entry_part *results;
     int num_results;
 
     rtree_init();
-    rtree_insert("/tmp/a", 0, 2, 0);
-    rtree_insert("/tmp/b", 1, 3, 1);
-    rtree_insert("/tmp/c", 2, -1, 2);
+    rtree_insert(0, 2, 0);
+    rtree_insert(1, 3, 1);
+    rtree_insert(2, -1, 2);
 
-#pragma GCC diagnostic ignored "-Wwrite-strings"
-    struct file_interval expected1[] = { {.filename = "/tmp/c", .start_closed = 1, .end_closed = 1, .start = 3, .end = 4} } ;
-#pragma GCC diagnostic pop
+    struct block_range_entry_part expected1[] = { block_range_entry_part(block_range_entry(2, -1, 2), true, true, 3, 4) };
 
-    num_results = rtree_query(results, max_results, 3, 4);
+    num_results = rtree_query(&results, 3, 4);
     BOOST_TEST(num_results == 1);
     for (int i = 0; i < num_results; ++i) {
-        BOOST_TEST(results[i]->filename == expected1[i].filename);
-        BOOST_TEST(results[i]->start_closed == expected1[i].start_closed);
-        BOOST_TEST(results[i]->end_closed == expected1[i].end_closed);
-        BOOST_TEST(results[i]->start == expected1[i].start);
-        BOOST_TEST(results[i]->end == expected1[i].end);
-        free(results[i]->filename);
-        free(results[i]);
+        BOOST_TEST(results[i] == expected1[i]);
     }
+    free(results);
 
-#pragma GCC diagnostic ignored "-Wwrite-strings"
-    struct file_interval expected2[] = { {.filename = "/tmp/a", .start_closed = 1, .end_closed = 0, .start = 0, .end = 1},
-                                         {.filename = "/tmp/b", .start_closed = 1, .end_closed = 0, .start = 1, .end = 2},
-                                         {.filename = "/tmp/c", .start_closed = 1, .end_closed = 1, .start = 2, .end = 3} } ;
-#pragma GCC diagnostic pop
+    struct block_range_entry_part expected2[] = { block_range_entry_part(block_range_entry(0, 2, 0), true, false, 0, 1),
+                                                  block_range_entry_part(block_range_entry(1, 3, 1), true, false, 1, 2),
+                                                  block_range_entry_part(block_range_entry(2, -1, 2), true, true, 2, 3) };
 
-    num_results = rtree_query(results, max_results, 0, 3);
+    num_results = rtree_query(&results, 0, 3);
     BOOST_TEST(num_results == 3);
     for (int i = 0; i < num_results; ++i) {
-        BOOST_TEST(results[i]->filename == expected2[i].filename);
-        BOOST_TEST(results[i]->start_closed == expected2[i].start_closed);
-        BOOST_TEST(results[i]->end_closed == expected2[i].end_closed);
-        BOOST_TEST(results[i]->start == expected2[i].start);
-        BOOST_TEST(results[i]->end == expected2[i].end);
-        free(results[i]->filename);
-        free(results[i]);
+        BOOST_TEST(results[i] == expected2[i]);
     }
+    free(results);
 
     rtree_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
 {
-    const int max_results = 10;
-    struct file_interval *results[max_results];
+    struct block_range_entry_part *results;
     int num_results;
 
     rtree_init();
-    rtree_insert("/tmp/a", 0, 2, 0);
-    rtree_insert("/tmp/b", 1, 3, 2);
-    rtree_insert("/tmp/c", 2, -1, 1);
+    rtree_insert(0, 2, 0);
+    rtree_insert(1, 3, 2);
+    rtree_insert(2, -1, 1);
 
-#pragma GCC diagnostic ignored "-Wwrite-strings"
-    struct file_interval expected1[] = { {.filename = "/tmp/b", .start_closed = 1, .end_closed = 1, .start = 3, .end = 3},
-                                         {.filename = "/tmp/c", .start_closed = 0, .end_closed = 1, .start = 3, .end = 4} } ;
-#pragma GCC diagnostic pop
+    struct block_range_entry_part expected1[] = { block_range_entry_part(block_range_entry(1, 3, 2), true, true, 3, 3),
+                                                  block_range_entry_part(block_range_entry(2, -1, 1), false, true, 3, 4) };
 
-    num_results = rtree_query(results, max_results, 3, 4);
+    num_results = rtree_query(&results, 3, 4);
     BOOST_TEST(num_results == 2);
     for (int i = 0; i < num_results; ++i) {
-        BOOST_TEST(results[i]->filename == expected1[i].filename);
-        BOOST_TEST(results[i]->start_closed == expected1[i].start_closed);
-        BOOST_TEST(results[i]->end_closed == expected1[i].end_closed);
-        BOOST_TEST(results[i]->start == expected1[i].start);
-        BOOST_TEST(results[i]->end == expected1[i].end);
-        free(results[i]->filename);
-        free(results[i]);
+        BOOST_TEST(results[i] == expected1[i]);
     }
+    free(results);
 
-#pragma GCC diagnostic ignored "-Wwrite-strings"
-    struct file_interval expected2[] = { {.filename = "/tmp/a", .start_closed = 1, .end_closed = 0, .start = 0, .end = 1},
-                                         {.filename = "/tmp/b", .start_closed = 1, .end_closed = 1, .start = 1, .end = 3},
-                                         {.filename = "/tmp/c", .start_closed = 0, .end_closed = 1, .start = 3, .end = 4} } ;
-#pragma GCC diagnostic pop
+    struct block_range_entry_part expected2[] = { block_range_entry_part(block_range_entry(0, 2,0), true, false, 0, 1),
+                                                  block_range_entry_part(block_range_entry(1, 3, 2), true, true, 1, 3),
+                                                  block_range_entry_part(block_range_entry(2, -1, 1), false, true, 3, 4) };
 
-    num_results = rtree_query(results, max_results, 0, 4);
+    num_results = rtree_query(&results, 0, 4);
     BOOST_TEST(num_results == 3);
     for (int i = 0; i < num_results; ++i) {
-        BOOST_TEST(results[i]->filename == expected2[i].filename);
-        BOOST_TEST(results[i]->start_closed == expected2[i].start_closed);
-        BOOST_TEST(results[i]->end_closed == expected2[i].end_closed);
-        BOOST_TEST(results[i]->start == expected2[i].start);
-        BOOST_TEST(results[i]->end == expected2[i].end);
-        free(results[i]->filename);
-        free(results[i]);
+        BOOST_TEST(results[i] == expected2[i]);
     }
+    free(results);
 
-#pragma GCC diagnostic ignored "-Wwrite-strings"
-    struct file_interval expected3[] = { {.filename = "/tmp/b", .start_closed = 1, .end_closed = 1, .start = 1, .end = 3} } ;
-#pragma GCC diagnostic pop
+    struct block_range_entry_part expected3[] = { block_range_entry_part(block_range_entry(1, 3, 2), true, true, 1, 3) };
 
-    num_results = rtree_query(results, max_results, 1, 3);
+    num_results = rtree_query(&results, 1, 3);
     BOOST_TEST(num_results == 1);
     for (int i = 0; i < num_results; ++i) {
-        BOOST_TEST(results[i]->filename == expected3[i].filename);
-        BOOST_TEST(results[i]->start_closed == expected3[i].start_closed);
-        BOOST_TEST(results[i]->end_closed == expected3[i].end_closed);
-        BOOST_TEST(results[i]->start == expected3[i].start);
-        BOOST_TEST(results[i]->end == expected3[i].end);
-        free(results[i]->filename);
-        free(results[i]);
+        BOOST_TEST(results[i] == expected3[i]);
     }
+    free(results);
 
     rtree_deinit();
 }

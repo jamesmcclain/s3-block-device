@@ -1,5 +1,6 @@
 CC = gcc
 CFLAGS ?= -Wall -O0 -ggdb3
+BOOST_ROOT ?= /usr/include
 
 
 all: bin/s3bd lib/libs3bd_local.so

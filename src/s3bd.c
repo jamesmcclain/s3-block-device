@@ -98,7 +98,7 @@ int main(int argc, char **argv)
     /* Report information from command line to backend */
     *blockdir = configuration.blockdir;
     *readonly = configuration.readonly;
-    *device_size = 0x40000000;
+    *device_size = 0x4000000; // XXX
     *block_size = sysconf(_SC_PAGESIZE);
 
     /* Arguments for libfuse */
