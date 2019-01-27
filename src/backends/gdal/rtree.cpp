@@ -114,7 +114,7 @@ extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
-    auto candidates = std::vector < value_t > ();
+    auto candidates = std::vector<value_t>();
     file_map_t file_map;
 
     pthread_rwlock_rdlock(&rtree_lock);
@@ -132,11 +132,9 @@ extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint
     }
 
     // Allocate the return array
-    *parts =
-        static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
+    *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
     if (*parts == nullptr) {
-      *(int *)0 = 42;
-      exit(-1);
+        exit(-1);
     }
 
     // Copy resulting intervals into the return array
@@ -145,18 +143,19 @@ extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint
         auto addr_interval = itr->first;
         uint64_t interval_start = std::max(addr_interval.lower(), start);
         uint64_t interval_end = std::min(addr_interval.upper(), end);
-        bool interval_start_closed = icl::contains(addr_interval, interval_start);
-        bool interval_end_closed = icl::contains(addr_interval, interval_end);
         auto entry = itr->second;
 
+        // Close the interval
+        if (!icl::contains(addr_interval, interval_start)) {
+            interval_start += 1;
+        }
+        if (!icl::contains(addr_interval, interval_end)) {
+            interval_end -= 1;
+        }
+
         if (interval_start <= interval_end) {
-            if ((interval_end - interval_start >= 2) || interval_start_closed || interval_end_closed) {
-                auto part =
-                    block_range_entry_part(entry,
-                                           interval_start_closed, interval_end_closed,
-                                           interval_start, interval_end);
-                (*parts)[i++] = part;
-            }
+            auto part = block_range_entry_part(entry, interval_start, interval_end);
+            (*parts)[i++] = part;
         }
     }
 

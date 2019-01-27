@@ -93,8 +93,8 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
             return -EIO;
         } else {
             uint64_t file_start_offset = entry_part->entry.start;
-            uint64_t range_start_offset = entry_part->start + (entry_part->start_closed ? 0 : 1);
-            uint64_t range_end_offset = entry_part->end - (entry_part->end_closed ? 0 : 1);
+            uint64_t range_start_offset = entry_part->start;
+            uint64_t range_end_offset = entry_part->end;
             uint64_t bytes_wanted = range_end_offset - range_start_offset + 1;
             uint64_t bytes_to_skip_in_file = range_start_offset - file_start_offset;
             uint64_t bytes_to_skip_in_buffer = range_start_offset - offset;
