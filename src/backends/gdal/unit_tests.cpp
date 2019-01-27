@@ -87,7 +87,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
     rtree_insert(1, 3, 1);
     rtree_insert(2, -1, 2);
 
-    struct block_range_entry_part expected1[] = { block_range_entry_part(block_range_entry(2, -1, 2), true, true, 3, 4) };
+    struct block_range_entry_part expected1[] = { block_range_entry_part(block_range_entry(2, -1, 2), 3, 4) };
 
     num_results = rtree_query(&results, 3, 4);
     BOOST_TEST(num_results == 1);
@@ -96,9 +96,9 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
     }
     free(results);
 
-    struct block_range_entry_part expected2[] = { block_range_entry_part(block_range_entry(0, 2, 0), true, false, 0, 1),
-                                                  block_range_entry_part(block_range_entry(1, 3, 1), true, false, 1, 2),
-                                                  block_range_entry_part(block_range_entry(2, -1, 2), true, true, 2, 3) };
+    struct block_range_entry_part expected2[] = { block_range_entry_part(block_range_entry(0, 2, 0), 0, 0),
+                                                  block_range_entry_part(block_range_entry(1, 3, 1), 1, 1),
+                                                  block_range_entry_part(block_range_entry(2, -1, 2), 2, 3) };
 
     num_results = rtree_query(&results, 0, 3);
     BOOST_TEST(num_results == 3);
@@ -120,8 +120,8 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
     rtree_insert(1, 3, 2);
     rtree_insert(2, -1, 1);
 
-    struct block_range_entry_part expected1[] = { block_range_entry_part(block_range_entry(1, 3, 2), true, true, 3, 3),
-                                                  block_range_entry_part(block_range_entry(2, -1, 1), false, true, 3, 4) };
+    struct block_range_entry_part expected1[] = { block_range_entry_part(block_range_entry(1, 3, 2), 3, 3),
+                                                  block_range_entry_part(block_range_entry(2, -1, 1), 4, 4) };
 
     num_results = rtree_query(&results, 3, 4);
     BOOST_TEST(num_results == 2);
@@ -130,9 +130,9 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
     }
     free(results);
 
-    struct block_range_entry_part expected2[] = { block_range_entry_part(block_range_entry(0, 2,0), true, false, 0, 1),
-                                                  block_range_entry_part(block_range_entry(1, 3, 2), true, true, 1, 3),
-                                                  block_range_entry_part(block_range_entry(2, -1, 1), false, true, 3, 4) };
+    struct block_range_entry_part expected2[] = { block_range_entry_part(block_range_entry(0, 2,0), 0, 0),
+                                                  block_range_entry_part(block_range_entry(1, 3, 2), 1, 3),
+                                                  block_range_entry_part(block_range_entry(2, -1, 1), 4, 4) };
 
     num_results = rtree_query(&results, 0, 4);
     BOOST_TEST(num_results == 3);
@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
     }
     free(results);
 
-    struct block_range_entry_part expected3[] = { block_range_entry_part(block_range_entry(1, 3, 2), true, true, 1, 3) };
+    struct block_range_entry_part expected3[] = { block_range_entry_part(block_range_entry(1, 3, 2), 1, 3) };
 
     num_results = rtree_query(&results, 1, 3);
     BOOST_TEST(num_results == 1);
