@@ -69,9 +69,8 @@ std::ostream & operator<<(std::ostream &out, const block_range_entry & entry)
 }
 
 block_range_entry_part::block_range_entry_part(const block_range_entry & _entry,
-                                               bool _start_closed, bool _end_closed,
                                                uint64_t _start, uint64_t _end):
-  entry(_entry), start_closed(_start_closed), end_closed(_end_closed), start(_start), end(_end) {}
+  entry(_entry), start(_start), end(_end) {}
 
 bool operator==(const block_range_entry & lhs, const block_range_entry & rhs)
 {
@@ -81,17 +80,13 @@ bool operator==(const block_range_entry & lhs, const block_range_entry & rhs)
 
 bool operator==(const block_range_entry_part & lhs, const block_range_entry_part & rhs)
 {
-    return ((lhs.entry == rhs.entry) && (lhs.start_closed == rhs.start_closed)
-            && (lhs.end_closed == rhs.end_closed) && (lhs.start == rhs.start)
-            && (lhs.end == rhs.end));
+    return ((lhs.entry == rhs.entry) && (lhs.end == rhs.end));
 }
 
 std::ostream & operator<<(std::ostream &out, const block_range_entry_part & entry_part)
 {
     out << "block_range_entry_part("
         << "entry=[" << entry_part.entry
-        << "],start_closed=" << static_cast<bool>(entry_part.start_closed)
-        << ",end_closed=" << static_cast<bool>(entry_part.end_closed)
         << std::hex << std::uppercase
         << ",start=0x" << entry_part.start
         << ",end=0x" << entry_part.end

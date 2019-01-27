@@ -48,14 +48,12 @@ struct block_range_entry {
 
 struct block_range_entry_part {
     struct block_range_entry entry;
-    uint8_t start_closed;
-    uint8_t end_closed;
+    // Closed interval
     uint64_t start;
     uint64_t end;
 
 #ifdef __cplusplus
     block_range_entry_part(const block_range_entry & entry,
-                           bool start_closed, bool end_closed,
                            uint64_t start, uint64_t end);
 
     friend std::ostream & operator<<(std::ostream &out, const block_range_entry_part & entry_part);
