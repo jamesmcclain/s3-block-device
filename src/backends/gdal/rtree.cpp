@@ -132,9 +132,8 @@ extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint
     }
 
     // Allocate the return array
-    *parts = static_cast < block_range_entry_part * >(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
+    *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
     if (*parts == nullptr) {
-        *(int *) 0 = 42;
         exit(-1);
     }
 
