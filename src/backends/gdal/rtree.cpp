@@ -44,7 +44,6 @@
 #include "rtree.h"
 #include "block_range_entry.h"
 
-
 // R-tree
 namespace bi = boost::interprocess;
 namespace bg = boost::geometry;
@@ -64,7 +63,6 @@ typedef icl::interval<uint64_t> addr_interval_t;
 
 static rtree_t *rtree_ptr = nullptr;
 static pthread_rwlock_t rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
-
 
 extern "C" int rtree_init()
 {
@@ -110,7 +108,7 @@ extern "C" uint64_t rtree_size()
     return static_cast<uint64_t>(rtree_ptr->size());
 }
 
-extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint64_t end)
+extern "C" int rtree_query(block_range_entry_part **parts, uint64_t start, uint64_t end)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
@@ -122,7 +120,8 @@ extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint
     pthread_rwlock_unlock(&rtree_lock);
 
     // Insert results from the R-tree query into the interval map
-    for (auto itr = candidates.begin(); itr != candidates.end(); ++itr) {
+    for (auto itr = candidates.begin(); itr != candidates.end(); ++itr)
+    {
         uint64_t interval_start = itr->first.min_corner().get<0>();
         uint64_t interval_end = itr->first.max_corner().get<0>();
         auto addr_interval = addr_interval_t::closed(interval_start, interval_end);
@@ -133,27 +132,32 @@ extern "C" int rtree_query(block_range_entry_part ** parts, uint64_t start, uint
 
     // Allocate the return array
     *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
-    if (*parts == nullptr) {
+    if (*parts == nullptr)
+    {
         exit(-1);
     }
 
     // Copy resulting intervals into the return array
     int i = 0;
-    for (auto itr = file_map.begin(); itr != file_map.end(); ++itr) {
+    for (auto itr = file_map.begin(); itr != file_map.end(); ++itr)
+    {
         auto addr_interval = itr->first;
         uint64_t interval_start = std::max(addr_interval.lower(), start);
         uint64_t interval_end = std::min(addr_interval.upper(), end);
         auto entry = itr->second;
 
         // Close the interval
-        if (!icl::contains(addr_interval, interval_start)) {
+        if (!icl::contains(addr_interval, interval_start))
+        {
             interval_start += 1;
         }
-        if (!icl::contains(addr_interval, interval_end)) {
+        if (!icl::contains(addr_interval, interval_end))
+        {
             interval_end -= 1;
         }
 
-        if (interval_start <= interval_end) {
+        if (interval_start <= interval_end)
+        {
             auto part = block_range_entry_part(entry, interval_start, interval_end);
             (*parts)[i++] = part;
         }
@@ -169,7 +173,8 @@ extern "C" uint64_t rtree_dump(block_range_entry **entries)
     pthread_rwlock_rdlock(&rtree_lock);
     n = i = static_cast<uint64_t>(rtree_ptr->size());
     *entries = static_cast<block_range_entry *>(malloc(sizeof(block_range_entry) * n));
-    for (auto itr = rtree_ptr->begin(); itr != rtree_ptr->end(); ++itr) {
+    for (auto itr = rtree_ptr->begin(); itr != rtree_ptr->end(); ++itr)
+    {
         (*entries)[--i] = itr->second;
     }
     pthread_rwlock_unlock(&rtree_lock);

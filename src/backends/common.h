@@ -1,13 +1,13 @@
 #ifndef __COMMON_H__
 #define __COMMON_H__
 
-
 int s3bd_getattr(const char *path, struct stat *stbuf)
 {
     int res = 0;
 
     memset(stbuf, 0, sizeof(struct stat));
-    if (strcmp(path, "/") == 0) {
+    if (strcmp(path, "/") == 0)
+    {
         stbuf->st_mode = S_IFDIR | 0755;
         stbuf->st_nlink = 2;
         stbuf->st_ino = 1;
@@ -16,10 +16,15 @@ int s3bd_getattr(const char *path, struct stat *stbuf)
         stbuf->st_atime = 0;
         stbuf->st_mtime = 0;
         stbuf->st_ctime = 0;
-    } else if (strcmp(path, device_name) == 0) {
-        if (readonly) {
+    }
+    else if (strcmp(path, device_name) == 0)
+    {
+        if (readonly)
+        {
             stbuf->st_mode = S_IFREG | 0400;
-        } else {
+        }
+        else
+        {
             stbuf->st_mode = S_IFREG | 0600;
         }
         stbuf->st_nlink = 1;
@@ -32,7 +37,8 @@ int s3bd_getattr(const char *path, struct stat *stbuf)
         stbuf->st_atime = 0;
         stbuf->st_mtime = 0;
         stbuf->st_ctime = 0;
-    } else
+    }
+    else
         res = -ENOENT;
 
     return res;
@@ -122,6 +128,5 @@ int s3bd_statfs(const char *path, struct statvfs *buf)
     buf->f_favail = 0;
     return 0;
 }
-
 
 #endif

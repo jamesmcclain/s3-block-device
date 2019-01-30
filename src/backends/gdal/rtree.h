@@ -25,12 +25,12 @@
 #include <stdint.h>
 #include "block_range_entry.h"
 
-
 #ifndef __RANGE_H__
 #define __RANGE_H__
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
     int rtree_init();
