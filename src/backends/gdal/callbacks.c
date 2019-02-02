@@ -158,7 +158,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     }
 
     // Make note of the new block range in the index
-    rtree_insert(addr_start, addr_end, serial_number);
+    rtree_insert(addr_start, addr_end, serial_number, false, NULL, 0); // XXX 
 
     return size;
 }
@@ -185,7 +185,7 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
             pthread_mutex_lock(&list_mutex);
             while (VSIFReadL(&entry, sizeof(entry), 1, handle) == 1)
             {
-                rtree_insert(entry.start, entry.end, entry.serial_number);
+                rtree_insert(entry.start, entry.end, entry.serial_number, false, NULL, 0);
                 _serial_number = _serial_number < entry.serial_number ? entry.serial_number : _serial_number;
             }
             pthread_mutex_unlock(&list_mutex);
