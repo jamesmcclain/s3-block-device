@@ -37,11 +37,11 @@ extern "C"
     int rtree_init();
     int rtree_deinit();
     int rtree_insert(uint64_t start, uint64_t end, long sn,
-                     bool dirty, uint8_t *bytes);
-    int rtree_remove(uint64_t start, uint64_t end, long sn, bool dirty);
-    uint64_t rtree_size(bool dirty);
-    int rtree_query(struct block_range_entry_part **parts,
-                    uint64_t start, uint64_t end);
+                     bool memory, uint8_t *bytes);
+    int rtree_remove(uint64_t start, uint64_t end, long sn, bool memory);
+    uint64_t rtree_size(bool memory);
+    int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
+                    struct block_range_entry_part **parts);
     uint64_t rtree_dump(struct block_range_entry **entries);
 
 #ifdef __cplusplus

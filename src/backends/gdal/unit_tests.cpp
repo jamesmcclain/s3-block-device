@@ -38,61 +38,76 @@ BOOST_AUTO_TEST_CASE(rtree_deinit_test)
     BOOST_TEST(rtree_deinit() == 1);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_insert_remove_test)
+BOOST_AUTO_TEST_CASE(rtree_insert_remove_storage_test)
 {
-    bool dirty_tree = false;
+    bool in_memory = false;
 
     rtree_init();
-    BOOST_TEST(rtree_size(dirty_tree) == 0u);
-    rtree_insert(0, 1, 0, dirty_tree, nullptr);
-    BOOST_TEST(rtree_size(dirty_tree) == 1u);
-    rtree_remove(0, 1, 0, dirty_tree);
-    BOOST_TEST(rtree_size(dirty_tree) == 0u);
+    BOOST_TEST(rtree_size(in_memory) == 0u);
+    rtree_insert(0, 1, 0, in_memory, nullptr);
+    BOOST_TEST(rtree_size(in_memory) == 1u);
+    rtree_remove(0, 1, 0, in_memory);
+    BOOST_TEST(rtree_size(in_memory) == 0u);
     rtree_deinit();
 }
 
-BOOST_AUTO_TEST_CASE(rtree_query_result_size_test)
+BOOST_AUTO_TEST_CASE(rtree_memory_merge_test)
 {
-    bool dirty_tree = false;
+    bool in_memory = true;
+
+    rtree_init();
+    rtree_insert(3, 3, 0, in_memory, nullptr);
+    rtree_insert(3, 3, 1, in_memory, nullptr);
+    BOOST_TEST(rtree_size(in_memory) == 1u);
+    rtree_insert(5, 5, 2, in_memory, nullptr);
+    BOOST_TEST(rtree_size(in_memory) == 2u);
+    rtree_insert(4, 4, 3, in_memory, nullptr);
+    BOOST_TEST(rtree_size(in_memory) == 1u);
+    rtree_deinit();
+}
+
+BOOST_AUTO_TEST_CASE(rtree_query_result_size_storage_test)
+{
+    bool in_memory = false;
     block_range_entry_part *results;
     int num_results;
 
     rtree_init();
-    rtree_insert(0, 5, 0, dirty_tree, nullptr);
-    rtree_insert(4, 7, 1, dirty_tree, nullptr);
+    rtree_insert(0, 5, 0, in_memory, nullptr);
+    rtree_insert(4, 7, 1, in_memory, nullptr);
 
-    BOOST_TEST((num_results = rtree_query(&results, 0, 3)) == 1);
+    BOOST_TEST((num_results = rtree_query(0, 3, nullptr, &results)) == 1);
     free(results);
 
-    BOOST_TEST((num_results = rtree_query(&results, 0, 4)) == 2);
+    BOOST_TEST((num_results = rtree_query(0, 4, nullptr, &results)) == 2);
     free(results);
 
-    BOOST_TEST((num_results = rtree_query(&results, 4, 5)) == 1);
+    BOOST_TEST((num_results = rtree_query(4, 5, nullptr, &results)) == 1);
     free(results);
 
-    BOOST_TEST((num_results = rtree_query(&results, 5, 7)) == 1);
+    BOOST_TEST((num_results = rtree_query(5, 7, nullptr, &results)) == 1);
     free(results);
 
-    BOOST_TEST((num_results = rtree_query(&results, 6, 7)) == 1);
+    BOOST_TEST((num_results = rtree_query(6, 7, nullptr, &results)) == 1);
     free(results);
 
     rtree_deinit();
 }
 
-BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
+BOOST_AUTO_TEST_CASE(rtree_query_result_interval_storage_test_1)
 {
-    bool dirty_tree = false;
+    bool in_memory = false;
     struct block_range_entry_part *results;
     int num_results;
 
     rtree_init();
-    rtree_insert(0, 2, 0, dirty_tree, nullptr);
-    rtree_insert(1, 3, 1, dirty_tree, nullptr);
-    rtree_insert(2, -1, 2, dirty_tree, nullptr);
+    rtree_insert(0, 2, 0, in_memory, nullptr);
+    rtree_insert(1, 3, 1, in_memory, nullptr);
+    rtree_insert(2, -1, 2, in_memory, nullptr);
 
     struct block_range_entry_part expected1[] = {block_range_entry_part(block_range_entry(2, -1, 2), 3, 4)};
 
-    num_results = rtree_query(&results, 3, 4);
+    num_results = rtree_query(3, 4, nullptr, &results);
     BOOST_TEST(num_results == 1);
     for (int i = 0; i < num_results; ++i)
     {
@@ -104,7 +119,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
                                                  block_range_entry_part(block_range_entry(1, 3, 1), 1, 1),
                                                  block_range_entry_part(block_range_entry(2, -1, 2), 2, 3)};
 
-    num_results = rtree_query(&results, 0, 3);
+    num_results = rtree_query(0, 3, nullptr, &results);
     BOOST_TEST(num_results == 3);
     for (int i = 0; i < num_results; ++i)
     {
@@ -115,21 +130,21 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_1)
     rtree_deinit();
 }
 
-BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
+BOOST_AUTO_TEST_CASE(rtree_query_result_interval_storage_test_2)
 {
-    bool dirty_tree = false;
+    bool in_memory = false;
     struct block_range_entry_part *results;
     int num_results;
 
     rtree_init();
-    rtree_insert(0, 2, 0, dirty_tree, nullptr);
-    rtree_insert(1, 3, 2, dirty_tree, nullptr);
-    rtree_insert(2, -1, 1, dirty_tree, nullptr);
+    rtree_insert(0, 2, 0, in_memory, nullptr);
+    rtree_insert(1, 3, 2, in_memory, nullptr);
+    rtree_insert(2, -1, 1, in_memory, nullptr);
 
     struct block_range_entry_part expected1[] = {block_range_entry_part(block_range_entry(1, 3, 2), 3, 3),
                                                  block_range_entry_part(block_range_entry(2, -1, 1), 4, 4)};
 
-    num_results = rtree_query(&results, 3, 4);
+    num_results = rtree_query(3, 4, nullptr, &results);
     BOOST_TEST(num_results == 2);
     for (int i = 0; i < num_results; ++i)
     {
@@ -141,7 +156,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
                                                  block_range_entry_part(block_range_entry(1, 3, 2), 1, 3),
                                                  block_range_entry_part(block_range_entry(2, -1, 1), 4, 4)};
 
-    num_results = rtree_query(&results, 0, 4);
+    num_results = rtree_query(0, 4, nullptr, &results);
     BOOST_TEST(num_results == 3);
     for (int i = 0; i < num_results; ++i)
     {
@@ -151,7 +166,7 @@ BOOST_AUTO_TEST_CASE(rtree_query_result_interval_test_2)
 
     struct block_range_entry_part expected3[] = {block_range_entry_part(block_range_entry(1, 3, 2), 1, 3)};
 
-    num_results = rtree_query(&results, 1, 3);
+    num_results = rtree_query(1, 3, nullptr, &results);
     BOOST_TEST(num_results == 1);
     for (int i = 0; i < num_results; ++i)
     {

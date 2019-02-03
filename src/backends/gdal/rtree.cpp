@@ -62,126 +62,133 @@ namespace icl = boost::icl;
 typedef icl::interval_map<uint64_t, block_range_entry> file_map_t;
 typedef icl::interval<uint64_t> addr_interval_t;
 
-static rtree_t *clean_rtree_ptr = nullptr;
-static rtree_t *dirty_rtree_ptr = nullptr;
-static pthread_rwlock_t clean_rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
-static pthread_rwlock_t dirty_rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
+static rtree_t *storage_rtree_ptr = nullptr;
+static rtree_t *memory_rtree_ptr = nullptr;
+static pthread_rwlock_t storage_rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_rwlock_t memory_rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 extern "C" int rtree_init()
 {
-    if (clean_rtree_ptr == nullptr)
+    if (storage_rtree_ptr == nullptr)
     {
-        clean_rtree_ptr = new rtree_t();
+        storage_rtree_ptr = new rtree_t();
     }
-    if (dirty_rtree_ptr == nullptr)
+    if (memory_rtree_ptr == nullptr)
     {
-        dirty_rtree_ptr = new rtree_t();
+        memory_rtree_ptr = new rtree_t();
     }
     return 1;
 }
 
 extern "C" int rtree_deinit()
 {
-    if (clean_rtree_ptr != nullptr)
+    if (storage_rtree_ptr != nullptr)
     {
-        delete clean_rtree_ptr;
-        clean_rtree_ptr = nullptr;
+        delete storage_rtree_ptr;
+        storage_rtree_ptr = nullptr;
     }
-    if (dirty_rtree_ptr != nullptr)
+    if (memory_rtree_ptr != nullptr)
     {
-        delete dirty_rtree_ptr;
-        dirty_rtree_ptr = nullptr;
+        delete memory_rtree_ptr;
+        memory_rtree_ptr = nullptr;
     }
     return 1;
 }
 
-static int rtree_insert_dirty(uint64_t start, uint64_t end, long sn, uint8_t *bytes)
+static int rtree_insert_memory(uint64_t start, uint64_t end, long sn, uint8_t *bytes)
 {
-    auto query_range = range_t(point_t(start), point_t(end));
+    auto query_range = range_t(point_t(start > 0 ? start - 1 : 0), point_t(end + 1));
     auto byte_vector = byte_vector_t();
     auto intersects = bgi::intersects(query_range);
     auto candidates = std::vector<value_t>();
     uint64_t num_bytes = end - start + 1;
     int size;
 
-    byte_vector.insert(byte_vector.end(), bytes, bytes + num_bytes);
-
-    pthread_rwlock_wrlock(&dirty_rtree_lock);
+    if (bytes != nullptr)
     {
-        dirty_rtree_ptr->query(intersects, std::back_inserter(candidates));
-        for (auto itr = candidates.begin(); itr != candidates.end(); ++itr)
+        byte_vector.insert(byte_vector.end(), bytes, bytes + num_bytes);
+    }
+    else
+    {
+        byte_vector.resize(num_bytes);
+    }
+
+    pthread_rwlock_wrlock(&memory_rtree_lock);
+    memory_rtree_ptr->query(intersects, std::back_inserter(candidates));
+
+    for (auto itr = candidates.begin(); itr != candidates.end(); ++itr)
+    {
+        uint64_t old_start = itr->first.min_corner().get<0>();
+        uint64_t old_end = itr->first.max_corner().get<0>();
+        auto old_byte_vector = itr->second.second;
+
+        // If the old range begins strictly before the new one,
+        // then bytes from the old range must be added to the
+        // beginning of this range.
+        if (old_start < start)
         {
-            uint64_t old_start = itr->first.min_corner().get<0>();
-            uint64_t old_end = itr->first.max_corner().get<0>();
-            auto old_byte_vector = itr->second.second;
+            uint64_t bytes_needed = start - old_start;
+            auto old_begin = old_byte_vector.begin();
 
-            // If the old range begins strictly before the new one,
-            // then bytes from the old range must be added to the
-            // beginning of this range.
-            if (old_start < start)
-            {
-                uint64_t bytes_needed = start - old_start;
-                auto old_begin = old_byte_vector.begin();
-
-                byte_vector.insert(byte_vector.begin(), old_begin, old_begin + bytes_needed);
-                start = old_start;
-            }
-
-            // If the old range ends strictly after the new one, then
-            // bytes from the old range must be appended to the end of
-            // this range.
-            if (end < old_end)
-            {
-                uint64_t bytes_needed = old_end - end;
-                auto old_fin = old_byte_vector.end();
-
-                byte_vector.insert(byte_vector.end(), old_fin - bytes_needed, old_fin);
-                end = old_end;
-            }
+            byte_vector.insert(byte_vector.begin(), old_begin, old_begin + bytes_needed);
+            start = old_start;
         }
 
-        auto range = range_t(point_t(start), point_t(end));
-        auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector);
-        auto value = std::make_pair(range, entry);
+        // If the old range ends strictly after the new one, then
+        // bytes from the old range must be appended to the end of
+        // this range.
+        if (end < old_end)
+        {
+            uint64_t bytes_needed = old_end - end;
+            auto old_fin = old_byte_vector.end();
 
-        dirty_rtree_ptr->remove(candidates.begin(), candidates.end());
-        dirty_rtree_ptr->insert(value);
-        size = dirty_rtree_ptr->size();
+            byte_vector.insert(byte_vector.end(), old_fin - bytes_needed, old_fin);
+            end = old_end;
+        }
     }
-    pthread_rwlock_unlock(&dirty_rtree_lock);
+
+    auto range = range_t(point_t(start), point_t(end));
+    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector);
+    auto value = std::make_pair(range, entry);
+
+    memory_rtree_ptr->remove(candidates.begin(), candidates.end());
+    memory_rtree_ptr->insert(value);
+    size = memory_rtree_ptr->size();
+
+    pthread_rwlock_unlock(&memory_rtree_lock);
 
     return size;
 }
 
-static int rtree_insert_clean(uint64_t start, uint64_t end, long sn)
+static int rtree_insert_storage(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector_t());
     auto value = std::make_pair(range, entry);
     int size;
 
-    pthread_rwlock_wrlock(&clean_rtree_lock);
-    clean_rtree_ptr->insert(value);
-    size = clean_rtree_ptr->size();
-    pthread_rwlock_unlock(&clean_rtree_lock);
+    pthread_rwlock_wrlock(&storage_rtree_lock);
+    storage_rtree_ptr->insert(value);
+    size = storage_rtree_ptr->size();
+    pthread_rwlock_unlock(&storage_rtree_lock);
 
     return size;
 }
 
 extern "C" int rtree_insert(uint64_t start, uint64_t end, long sn,
-                            bool dirty, uint8_t *bytes)
+                            bool memory, uint8_t *bytes)
 {
-    if (dirty)
+    if (memory)
     {
-        return rtree_insert_dirty(start, end, sn, bytes);
+        return rtree_insert_memory(start, end, sn, bytes);
     }
     else
     {
-        return rtree_insert_clean(start, end, sn);
+        return rtree_insert_storage(start, end, sn);
     }
 }
 
-extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn, bool dirty)
+extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn, bool memory)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector_t());
@@ -189,15 +196,15 @@ extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn, bool dirty)
     rtree_t *rtree_ptr = nullptr;
     pthread_rwlock_t *lock_ptr = nullptr;
 
-    if (dirty)
+    if (memory)
     {
-        rtree_ptr = dirty_rtree_ptr;
-        lock_ptr = &clean_rtree_lock;
+        rtree_ptr = memory_rtree_ptr;
+        lock_ptr = &storage_rtree_lock;
     }
     else
     {
-        rtree_ptr = clean_rtree_ptr;
-        lock_ptr = &dirty_rtree_lock;
+        rtree_ptr = storage_rtree_ptr;
+        lock_ptr = &memory_rtree_lock;
     }
 
     pthread_rwlock_wrlock(lock_ptr);
@@ -206,37 +213,63 @@ extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn, bool dirty)
     return rtree_ptr->size();
 }
 
-extern "C" uint64_t rtree_size(bool dirty)
+extern "C" uint64_t rtree_size(bool memory)
 {
     rtree_t *rtree_ptr = nullptr;
 
-    if (dirty)
+    if (memory)
     {
-        rtree_ptr = dirty_rtree_ptr;
+        rtree_ptr = memory_rtree_ptr;
     }
     else
     {
-        rtree_ptr = clean_rtree_ptr;
+        rtree_ptr = storage_rtree_ptr;
     }
 
     return static_cast<uint64_t>(rtree_ptr->size());
 }
 
-extern "C" int rtree_query(block_range_entry_part **parts,
-                           uint64_t start, uint64_t end)
+extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
+                           block_range_entry_part **parts)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto intersects = bgi::intersects(range);
-    auto candidates = std::vector<value_t>();
+    auto storage_candidates = std::vector<value_t>();
+    auto memory_candidates = std::vector<value_t>();
     file_map_t file_map;
 
-    pthread_rwlock_rdlock(&clean_rtree_lock);
-    clean_rtree_ptr->query(intersects, std::back_inserter(candidates));
-    pthread_rwlock_unlock(&clean_rtree_lock);
+    // Read relevant ranges of bytes from in-memory data structure
+    pthread_rwlock_rdlock(&memory_rtree_lock);
+    memory_rtree_ptr->query(intersects, std::back_inserter(memory_candidates));
+    pthread_rwlock_unlock(&memory_rtree_lock);
+
+    // Copy ranges of bytes into the provided return buffer
+    if (buf != nullptr)
+    {
+        for (auto itr = memory_candidates.begin(); itr != memory_candidates.end(); ++itr)
+        {
+            auto entry = itr->second.first;
+            auto byte_vector = itr->second.second;
+            uint64_t intersection_start = std::max(entry.start, start);
+            uint64_t intersection_end = std::min(entry.end, end);
+            uint64_t skip_in_vector = entry.start - intersection_start;
+            uint64_t skip_in_buffer = start - intersection_start;
+            auto vector_begin = byte_vector.begin() + skip_in_vector;
+            auto vector_end = vector_begin + (intersection_start - intersection_end + 1);
+            auto buffer_begin = buf + skip_in_buffer;
+
+            std::copy(vector_begin, vector_end, buffer_begin);
+        }
+    }
+
+    // Query for relevant ranges of external-storage bytes
+    pthread_rwlock_rdlock(&storage_rtree_lock);
+    storage_rtree_ptr->query(intersects, std::back_inserter(storage_candidates));
+    pthread_rwlock_unlock(&storage_rtree_lock);
 
     // Insert results from the R-tree query into the interval map
     // XXX insert directly into the file_map?
-    for (auto itr = candidates.begin(); itr != candidates.end(); ++itr)
+    for (auto itr = storage_candidates.begin(); itr != storage_candidates.end(); ++itr)
     {
         uint64_t interval_start = itr->first.min_corner().get<0>();
         uint64_t interval_end = itr->first.max_corner().get<0>();
@@ -246,7 +279,20 @@ extern "C" int rtree_query(block_range_entry_part **parts,
         file_map += pair;
     }
 
-    // Allocate the return array
+    // Subtract byte ranges found in the in-memory structure from the
+    // list of intervals that must be read from external storage.
+    for (auto itr = memory_candidates.begin(); itr != memory_candidates.end(); ++itr)
+    {
+        auto range = itr->first;
+        uint64_t interval_start = range.min_corner().get<0>();
+        uint64_t interval_end = range.max_corner().get<0>();
+        auto addr_interval = addr_interval_t::closed(interval_start, interval_end);
+
+        file_map -= addr_interval;
+    }
+
+    // Allocate the return array for the list of ranges stored on
+    // external-storage.
     *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
     if (*parts == nullptr)
     {
@@ -286,13 +332,13 @@ extern "C" uint64_t rtree_dump(block_range_entry **entries)
 {
     uint64_t n, i;
 
-    pthread_rwlock_rdlock(&clean_rtree_lock);
-    n = i = static_cast<uint64_t>(clean_rtree_ptr->size());
+    pthread_rwlock_rdlock(&storage_rtree_lock);
+    n = i = static_cast<uint64_t>(storage_rtree_ptr->size());
     *entries = static_cast<block_range_entry *>(malloc(sizeof(block_range_entry) * n));
-    for (auto itr = clean_rtree_ptr->begin(); itr != clean_rtree_ptr->end(); ++itr)
+    for (auto itr = storage_rtree_ptr->begin(); itr != storage_rtree_ptr->end(); ++itr)
     {
         (*entries)[--i] = itr->second.first;
     }
-    pthread_rwlock_unlock(&clean_rtree_lock);
+    pthread_rwlock_unlock(&storage_rtree_lock);
     return n;
 }

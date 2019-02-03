@@ -71,11 +71,11 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
     uint64_t addr_end = offset + size - 1; // closed interval
     struct block_range_entry_part *entry_parts = NULL;
 
-    // Get paths covering this range
-    num_files = rtree_query(&entry_parts, addr_start, addr_end);
-
     // Clear the buffer: uncovered bytes are assumed to be zero.
     memset(buf, 0, size);
+
+    // Get paths covering this range
+    num_files = rtree_query(addr_start, addr_end, (uint8_t *)buf, &entry_parts);
 
     // For each file covering the range, copy the appropriate portion
     // into the buffer.
@@ -158,7 +158,7 @@ int s3bd_write(const char *path, const char *buf, size_t size,
     }
 
     // Make note of the new block range in the index
-    rtree_insert(addr_start, addr_end, serial_number, false, NULL, 0); // XXX 
+    rtree_insert(addr_start, addr_end, serial_number, true, NULL);
 
     return size;
 }
@@ -185,7 +185,7 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
             pthread_mutex_lock(&list_mutex);
             while (VSIFReadL(&entry, sizeof(entry), 1, handle) == 1)
             {
-                rtree_insert(entry.start, entry.end, entry.serial_number, false, NULL, 0);
+                rtree_insert(entry.start, entry.end, entry.serial_number, false, NULL);
                 _serial_number = _serial_number < entry.serial_number ? entry.serial_number : _serial_number;
             }
             pthread_mutex_unlock(&list_mutex);
