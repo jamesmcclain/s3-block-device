@@ -95,7 +95,8 @@ extern "C" int rtree_deinit()
     return 1;
 }
 
-static int rtree_insert_memory(uint64_t start, uint64_t end, long sn, uint8_t *bytes)
+static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
+                               const uint8_t *bytes)
 {
     auto query_range = range_t(point_t(start > 0 ? start - 1 : 0), point_t(end + 1));
     auto byte_vector = byte_vector_t();
@@ -114,6 +115,7 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn, uint8_t *b
     }
 
     pthread_rwlock_wrlock(&memory_rtree_lock);
+
     memory_rtree_ptr->query(intersects, std::back_inserter(candidates));
 
     for (auto itr = candidates.begin(); itr != candidates.end(); ++itr)
@@ -176,7 +178,7 @@ static int rtree_insert_storage(uint64_t start, uint64_t end, long sn)
 }
 
 extern "C" int rtree_insert(uint64_t start, uint64_t end, long sn,
-                            bool memory, uint8_t *bytes)
+                            bool memory, const uint8_t *bytes)
 {
     if (memory)
     {
@@ -202,18 +204,26 @@ extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn)
 
 extern "C" uint64_t rtree_size(bool memory)
 {
+    uint64_t size;
     rtree_t *rtree_ptr = nullptr;
+    pthread_rwlock_t *lock_ptr;
 
     if (memory)
     {
         rtree_ptr = memory_rtree_ptr;
+        lock_ptr = &memory_rtree_lock;
     }
     else
     {
         rtree_ptr = storage_rtree_ptr;
+        lock_ptr = &storage_rtree_lock;
     }
 
-    return static_cast<uint64_t>(rtree_ptr->size());
+    pthread_rwlock_rdlock(lock_ptr);
+    size = static_cast<uint64_t>(rtree_ptr->size());
+    pthread_rwlock_unlock(lock_ptr);
+
+    return size;
 }
 
 extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
@@ -225,10 +235,10 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
     auto memory_candidates = std::vector<value_t>();
     file_map_t file_map;
 
-    // Read relevant ranges of bytes from in-memory data structure
     pthread_rwlock_rdlock(&memory_rtree_lock);
+
+    // Read relevant ranges of bytes from in-memory data structure
     memory_rtree_ptr->query(intersects, std::back_inserter(memory_candidates));
-    pthread_rwlock_unlock(&memory_rtree_lock);
 
     // Copy ranges of bytes into the provided return buffer
     if (buf != nullptr)
@@ -239,8 +249,8 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
             auto byte_vector = itr->second.second;
             uint64_t intersection_start = std::max(entry.start, start);
             uint64_t intersection_end = std::min(entry.end, end);
-            uint64_t skip_in_vector = entry.start - intersection_start;
-            uint64_t skip_in_buffer = start - intersection_start;
+            uint64_t skip_in_vector = intersection_start <= entry.start ? entry.start - intersection_start : 0;
+            uint64_t skip_in_buffer = intersection_start <= start ? start - intersection_start : 0;
             auto vector_begin = byte_vector.begin() + skip_in_vector;
             auto vector_end = vector_begin + (intersection_end - intersection_start + 1);
             auto buffer_begin = buf + skip_in_buffer;
@@ -249,10 +259,10 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
         }
     }
 
-    // Query for relevant ranges of external-storage bytes
     pthread_rwlock_rdlock(&storage_rtree_lock);
+
+    // Query for relevant ranges of external-storage bytes
     storage_rtree_ptr->query(intersects, std::back_inserter(storage_candidates));
-    pthread_rwlock_unlock(&storage_rtree_lock);
 
     // Insert results from the R-tree query into the interval map
     // XXX insert directly into the file_map?
@@ -278,41 +288,55 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
         file_map -= addr_interval;
     }
 
+    pthread_rwlock_unlock(&memory_rtree_lock);
+
     // Allocate the return array for the list of ranges stored on
     // external-storage.
-    *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * icl::interval_count(file_map)));
-    if (*parts == nullptr)
+    uint64_t num_files = icl::interval_count(file_map);
+
+    if (num_files > 0)
     {
-        exit(-1);
-    }
+        *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * num_files));
+        if (*parts == nullptr)
+        {
+            exit(-1);
+        }
 
-    // Copy resulting intervals into the return array
-    int i = 0;
-    for (auto itr = file_map.begin(); itr != file_map.end(); ++itr)
+        // Copy resulting intervals into the return array
+        int i = 0;
+        for (auto itr = file_map.begin(); itr != file_map.end(); ++itr)
+        {
+            auto addr_interval = itr->first;
+            uint64_t interval_start = std::max(addr_interval.lower(), start);
+            uint64_t interval_end = std::min(addr_interval.upper(), end);
+            auto entry = itr->second;
+
+            // Close the interval
+            if (!icl::contains(addr_interval, interval_start))
+            {
+                interval_start += 1;
+            }
+            if (!icl::contains(addr_interval, interval_end))
+            {
+                interval_end -= 1;
+            }
+
+            if (interval_start <= interval_end)
+            {
+                auto part = block_range_entry_part(entry, interval_start, interval_end);
+                (*parts)[i++] = part;
+            }
+        }
+
+        pthread_rwlock_unlock(&storage_rtree_lock);
+
+        return i;
+    }
+    else
     {
-        auto addr_interval = itr->first;
-        uint64_t interval_start = std::max(addr_interval.lower(), start);
-        uint64_t interval_end = std::min(addr_interval.upper(), end);
-        auto entry = itr->second;
-
-        // Close the interval
-        if (!icl::contains(addr_interval, interval_start))
-        {
-            interval_start += 1;
-        }
-        if (!icl::contains(addr_interval, interval_end))
-        {
-            interval_end -= 1;
-        }
-
-        if (interval_start <= interval_end)
-        {
-            auto part = block_range_entry_part(entry, interval_start, interval_end);
-            (*parts)[i++] = part;
-        }
+        pthread_rwlock_unlock(&storage_rtree_lock);
+        return 0;
     }
-
-    return i;
 }
 
 extern "C" uint64_t rtree_dump(block_range_entry **entries)

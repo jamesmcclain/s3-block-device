@@ -120,45 +120,23 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
         }
     }
 
-    free(entry_parts);
+    if (num_files > 0)
+    {
+        free(entry_parts);
+    }
 
     return size;
 }
 
-int s3bd_write(const char *path, const char *buf, size_t size,
+int s3bd_write(const char *path, const char *buffer, size_t size,
                off_t offset, struct fuse_file_info *fi)
 {
-    char addr_path[PATHLEN];
-    VSILFILE *handle = NULL;
     uint64_t addr_start = offset;
     uint64_t addr_end = offset + size - 1; // closed interval
     long serial_number = ++_serial_number;
-    struct block_range_entry entry;
-
-    entry.start = addr_start;
-    entry.end = addr_end;
-    entry.serial_number = serial_number;
-
-    entry_to_filename(&entry, addr_path);
-
-    // Attempt to open the resource for writing, then attempt to
-    // write bytes into the file.
-    if ((handle = VSIFOpenL(addr_path, "w")) == NULL)
-    {
-        return -EIO;
-    }
-    else if (VSIFWriteL(buf, size, 1, handle) != 1)
-    {
-        VSIFCloseL(handle);
-        return -EIO;
-    }
-    else
-    {
-        VSIFCloseL(handle);
-    }
 
     // Make note of the new block range in the index
-    rtree_insert(addr_start, addr_end, serial_number, true, NULL);
+    rtree_insert(addr_start, addr_end, serial_number, true, (uint8_t *)buffer);
 
     return size;
 }
