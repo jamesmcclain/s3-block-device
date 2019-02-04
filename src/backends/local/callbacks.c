@@ -150,13 +150,14 @@ int s3bd_write(const char *path, const char *buf, size_t size,
         }
         else if (access(block_path, F_OK) == -1)
         { // File does not exist, make it
-            fd = open(block_path, O_RDWR | O_CREAT);
-            ftruncate(fd, block_size);
-            lseek(fd, current_offset_in_block, SEEK_SET);
+            fd = open(block_path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+            if ((ftruncate(fd, block_size) != 0) || (lseek(fd, current_offset_in_block, SEEK_SET) == -1))
+            {
+                return -EIO;
+            }
         }
         else
         { // Evidently the file exists, but is not writable
-            close(fd);
             return -EIO;
         }
 

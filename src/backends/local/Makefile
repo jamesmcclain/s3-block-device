@@ -1,4 +1,4 @@
-CFLAGS ?= -Wall -O0 -ggdb3
+CFLAGS ?= -Wall -Werror -O0 -ggdb3
 
 
 all: libs3bd_local.so
