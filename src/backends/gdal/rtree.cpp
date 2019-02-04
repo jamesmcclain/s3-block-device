@@ -188,29 +188,16 @@ extern "C" int rtree_insert(uint64_t start, uint64_t end, long sn,
     }
 }
 
-extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn, bool memory)
+extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
     auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector_t());
     auto value = std::make_pair(range, entry);
-    rtree_t *rtree_ptr = nullptr;
-    pthread_rwlock_t *lock_ptr = nullptr;
 
-    if (memory)
-    {
-        rtree_ptr = memory_rtree_ptr;
-        lock_ptr = &storage_rtree_lock;
-    }
-    else
-    {
-        rtree_ptr = storage_rtree_ptr;
-        lock_ptr = &memory_rtree_lock;
-    }
-
-    pthread_rwlock_wrlock(lock_ptr);
-    rtree_ptr->remove(value);
-    pthread_rwlock_unlock(lock_ptr);
-    return rtree_ptr->size();
+    pthread_rwlock_wrlock(&storage_rtree_lock);
+    storage_rtree_ptr->remove(value);
+    pthread_rwlock_unlock(&storage_rtree_lock);
+    return storage_rtree_ptr->size();
 }
 
 extern "C" uint64_t rtree_size(bool memory)
@@ -255,7 +242,7 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
             uint64_t skip_in_vector = entry.start - intersection_start;
             uint64_t skip_in_buffer = start - intersection_start;
             auto vector_begin = byte_vector.begin() + skip_in_vector;
-            auto vector_end = vector_begin + (intersection_start - intersection_end + 1);
+            auto vector_end = vector_begin + (intersection_end - intersection_start + 1);
             auto buffer_begin = buf + skip_in_buffer;
 
             std::copy(vector_begin, vector_end, buffer_begin);
