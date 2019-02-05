@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS ?= -Wall -O1 -ggdb3
+CFLAGS ?= -Wall -Og -ggdb3
 BOOST_ROOT ?= /usr/include
 
 
