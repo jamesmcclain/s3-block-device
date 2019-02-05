@@ -124,6 +124,9 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
         uint64_t old_end = itr->first.max_corner().get<0>();
         auto old_byte_vector = itr->second.second;
 
+        // XXX copy smaller to larger
+        // XXX preallocate
+
         // If the old range begins strictly before the new one,
         // then bytes from the old range must be added to the
         // beginning of this range.
