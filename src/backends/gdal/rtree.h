@@ -23,24 +23,30 @@
  */
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "block_range_entry.h"
-
 
 #ifndef __RANGE_H__
 #define __RANGE_H__
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
     int rtree_init();
     int rtree_deinit();
-    int rtree_insert(uint64_t start, uint64_t end, long nanos);
-    int rtree_remove(uint64_t start, uint64_t end, long nanos);
-    uint64_t rtree_size();
-    int rtree_query(struct block_range_entry_part **parts,
-                    uint64_t start, uint64_t end);
-    uint64_t rtree_dump(struct block_range_entry **entries);
+    int rtree_insert(uint64_t start, uint64_t end, long sn,
+                     bool memory, const uint8_t *bytes);
+    int rtree_remove(uint64_t start, uint64_t end, long sn);
+    uint64_t rtree_size(bool memory);
+    int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
+                    struct block_range_entry_part **parts);
+    uint64_t rtree_storage_dump(struct block_range_entry **entries);
+    void rtree_memory_mutex_unlock();
+    void rtree_memory_clear();
+    uint64_t rtree_memory_dump(struct block_range_entry const ***entries,
+                               uint8_t const ***bytes);
 
 #ifdef __cplusplus
 }

@@ -36,13 +36,12 @@
 #include "cmdline.h"
 
 /* Backend interface */
-static struct fuse_operations operations = { };
+static struct fuse_operations operations = {};
 
 static char **blockdir = NULL;
 static int64_t *block_size = NULL;
 static int64_t *device_size = NULL;
 static int *readonly = NULL;
-
 
 int main(int argc, char **argv)
 {
@@ -58,14 +57,15 @@ int main(int argc, char **argv)
             configuration.backend, configuration.blockdir,
             configuration.mountpoint, configuration.readonly);
 
-    if (configuration.backend == NULL || configuration.blockdir == NULL
-        || configuration.mountpoint == NULL) {
+    if (configuration.backend == NULL || configuration.blockdir == NULL || configuration.mountpoint == NULL)
+    {
         exit(EXIT_FAILURE);
     }
 
     /* Load the backend */
     handle = dlopen(configuration.backend, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
+    if (handle == NULL)
+    {
         fprintf(stderr, "Unable to load backend library.\n");
         exit(EXIT_FAILURE);
     }
@@ -76,7 +76,8 @@ int main(int argc, char **argv)
     operations.open = dlsym(handle, "s3bd_open");
     operations.flush = dlsym(handle, "s3bd_flush");
     operations.read = dlsym(handle, "s3bd_read");
-    if (!configuration.readonly) {
+    if (!configuration.readonly)
+    {
         operations.write = dlsym(handle, "s3bd_write");
     }
     operations.fsync = dlsym(handle, "s3bd_fsync");

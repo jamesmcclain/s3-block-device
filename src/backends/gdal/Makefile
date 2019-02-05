@@ -1,4 +1,4 @@
-CFLAGS ?= -Wall -O0 -ggdb3
+CFLAGS ?= -Wall -Werror -Og -ggdb3
 BOOST_ROOT ?= /usr/include
 
 
@@ -24,3 +24,4 @@ cleaner: clean
 	rm -f *.so
 
 cleanest: cleaner
+	rm -f unit_tests
