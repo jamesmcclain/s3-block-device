@@ -1,6 +1,5 @@
 CFLAGS ?= -Wall -Werror -Og -ggdb3
 
-
 all: libs3bd_local.so
 
 %.o: %.c ../backend.h
