@@ -24,3 +24,4 @@ cleaner: clean
 	rm -f *.so
 
 cleanest: cleaner
+	rm -f unit_tests
