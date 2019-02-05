@@ -120,10 +120,7 @@ int s3bd_read(const char *path, char *buf, size_t size, off_t offset, struct fus
         }
     }
 
-    if (num_files > 0)
-    {
-        free(entry_parts);
-    }
+    free(entry_parts);
 
     return size;
 }
@@ -175,10 +172,68 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
     return 0;
 }
 
+static int memory_to_storage()
+{
+    struct block_range_entry **entries;
+    uint8_t **bytes;
+    uint64_t num_entries;
+
+    // The aquisition of locks (memory then storage [via the insert
+    // function]) is in the same order as in the query function, so
+    // deadlocks should not be a concern.
+    num_entries = rtree_memory_dump((struct block_range_entry const ***)&entries, (uint8_t const ***)&bytes);
+
+    for (int i = 0; i < num_entries; ++i)
+    {
+        char addr_path[PATHLEN];
+        VSILFILE *handle = NULL;
+        struct block_range_entry *entry = entries[i];
+
+        entry_to_filename(entry, addr_path);
+
+        // Attempt to open the resource for writing, then attempt to
+        // write bytes into the file.
+        if ((handle = VSIFOpenL(addr_path, "w")) == NULL)
+        {
+            free(entries);
+            free(bytes);
+            return -EIO;
+        }
+        else if (VSIFWriteL(bytes[i], entry->end - entry->start + 1, 1, handle) != 1)
+        {
+            free(entries);
+            free(bytes);
+            VSIFCloseL(handle);
+            return -EIO;
+        }
+        else
+        {
+            VSIFCloseL(handle);
+        }
+
+        rtree_insert(entry->start, entry->end, entry->serial_number, false, NULL);
+    }
+
+    free(entries);
+    free(bytes);
+    rtree_memory_clear();
+
+    rtree_memory_mutex_unlock(false);
+
+    return 0;
+}
+
 int s3bd_flush(const char *path, struct fuse_file_info *fi)
 {
     VSILFILE *handle = NULL;
     char list_path[PATHLEN];
+
+    // Flush memory to storage
+    int result = memory_to_storage();
+    if (result != 0)
+    {
+        return result;
+    }
 
     sprintf(list_path, "%s/LIST", blockdir);
 
@@ -188,7 +243,7 @@ int s3bd_flush(const char *path, struct fuse_file_info *fi)
         struct block_range_entry *entries;
         uint64_t num_entries;
 
-        num_entries = rtree_dump(&entries);
+        num_entries = rtree_storage_dump(&entries);
         VSIFWriteL(entries, sizeof(struct block_range_entry), num_entries, handle);
         VSIFCloseL(handle);
         free(entries);

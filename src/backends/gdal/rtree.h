@@ -42,7 +42,11 @@ extern "C"
     uint64_t rtree_size(bool memory);
     int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
                     struct block_range_entry_part **parts);
-    uint64_t rtree_dump(struct block_range_entry **entries);
+    uint64_t rtree_storage_dump(struct block_range_entry **entries);
+    void rtree_memory_mutex_unlock();
+    void rtree_memory_clear();
+    uint64_t rtree_memory_dump(struct block_range_entry const ***entries,
+                               uint8_t const ***bytes);
 
 #ifdef __cplusplus
 }

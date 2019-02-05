@@ -73,7 +73,6 @@ BOOST_AUTO_TEST_CASE(rtree_memory_contents_merge_test)
     uint8_t zeros[] = {0, 0, 0};
     uint8_t ones[] = {1, 1, 1};
     uint8_t actual[7];
-    uint64_t num_results;
     auto expected = std::vector<uint8_t>{0, 0, 1, 1, 1, 0, 0};
     struct block_range_entry_part *results;
 
@@ -81,11 +80,8 @@ BOOST_AUTO_TEST_CASE(rtree_memory_contents_merge_test)
     BOOST_TEST(rtree_insert(2, 4, 0, true, zeros) == 1);
     BOOST_TEST(rtree_insert(6, 8, 1, true, zeros) == 2);
     BOOST_TEST(rtree_insert(4, 6, 2, true, ones) == 1);
-    num_results = rtree_query(2, 8, actual, &results);
-    if (num_results > 0)
-    {
-        free(results);
-    }
+    rtree_query(2, 8, actual, &results);
+    free(results);
     BOOST_TEST(std::vector<uint8_t>(actual, actual + 7) == expected);
     rtree_deinit();
 }
@@ -114,7 +110,6 @@ BOOST_AUTO_TEST_CASE(ext2_problem_test)
 {
     const int N = 4096;
     uint8_t buffer[N];
-    uint64_t num_results;
     uint64_t sum = 0;
     struct block_range_entry_part *results;
 
@@ -123,11 +118,8 @@ BOOST_AUTO_TEST_CASE(ext2_problem_test)
     rtree_insert(1024, N - 1, 0, true, nullptr);
     buffer[0] = 1;
     buffer[1024] = 1;
-    num_results = rtree_query(0, N - 1, buffer, &results);
-    if (num_results > 0)
-    {
-        free(results);
-    }
+    rtree_query(0, N - 1, buffer, &results);
+    free(results);
     for (int i = 0; i < N; ++i)
     {
         sum += buffer[i];

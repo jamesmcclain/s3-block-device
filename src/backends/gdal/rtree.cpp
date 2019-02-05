@@ -52,7 +52,7 @@ namespace bgi = boost::geometry::index;
 typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
 typedef bgm::box<point_t> range_t;
 typedef std::vector<uint8_t> byte_vector_t;
-typedef std::pair<range_t, std::pair<block_range_entry, byte_vector_t>> value_t;
+typedef std::pair<range_t, std::pair<struct block_range_entry, byte_vector_t>> value_t;
 typedef bgi::linear<16, 4> params_t;
 typedef bgi::indexable<value_t> indexable_t;
 typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
@@ -294,62 +294,87 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
     // external-storage.
     uint64_t num_files = icl::interval_count(file_map);
 
-    if (num_files > 0)
+    *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * num_files));
+    if (*parts == nullptr)
     {
-        *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * num_files));
-        if (*parts == nullptr)
+        exit(-1);
+    }
+
+    // Copy resulting intervals into the return array
+    int i = 0;
+    for (auto itr = file_map.begin(); itr != file_map.end(); ++itr)
+    {
+        auto addr_interval = itr->first;
+        uint64_t interval_start = std::max(addr_interval.lower(), start);
+        uint64_t interval_end = std::min(addr_interval.upper(), end);
+        auto entry = itr->second;
+
+        // Close the interval
+        if (!icl::contains(addr_interval, interval_start))
         {
-            exit(-1);
+            interval_start += 1;
+        }
+        if (!icl::contains(addr_interval, interval_end))
+        {
+            interval_end -= 1;
         }
 
-        // Copy resulting intervals into the return array
-        int i = 0;
-        for (auto itr = file_map.begin(); itr != file_map.end(); ++itr)
+        if (interval_start <= interval_end)
         {
-            auto addr_interval = itr->first;
-            uint64_t interval_start = std::max(addr_interval.lower(), start);
-            uint64_t interval_end = std::min(addr_interval.upper(), end);
-            auto entry = itr->second;
-
-            // Close the interval
-            if (!icl::contains(addr_interval, interval_start))
-            {
-                interval_start += 1;
-            }
-            if (!icl::contains(addr_interval, interval_end))
-            {
-                interval_end -= 1;
-            }
-
-            if (interval_start <= interval_end)
-            {
-                auto part = block_range_entry_part(entry, interval_start, interval_end);
-                (*parts)[i++] = part;
-            }
+            auto part = block_range_entry_part(entry, interval_start, interval_end);
+            (*parts)[i++] = part;
         }
-
-        pthread_rwlock_unlock(&storage_rtree_lock);
-
-        return i;
     }
-    else
-    {
-        pthread_rwlock_unlock(&storage_rtree_lock);
-        return 0;
-    }
+
+    pthread_rwlock_unlock(&storage_rtree_lock);
+
+    return i;
 }
 
-extern "C" uint64_t rtree_dump(block_range_entry **entries)
+extern "C" uint64_t rtree_storage_dump(block_range_entry **entries)
 {
     uint64_t n, i;
 
     pthread_rwlock_rdlock(&storage_rtree_lock);
     n = i = static_cast<uint64_t>(storage_rtree_ptr->size());
-    *entries = static_cast<block_range_entry *>(malloc(sizeof(block_range_entry) * n));
+    *entries = static_cast<struct block_range_entry *>(
+        malloc(sizeof(struct block_range_entry) * n));
     for (auto itr = storage_rtree_ptr->begin(); itr != storage_rtree_ptr->end(); ++itr)
     {
         (*entries)[--i] = itr->second.first;
     }
     pthread_rwlock_unlock(&storage_rtree_lock);
+    return n;
+}
+
+extern "C" void rtree_memory_mutex_unlock()
+{
+    pthread_rwlock_unlock(&memory_rtree_lock);
+}
+
+extern "C" void rtree_memory_clear()
+{
+    memory_rtree_ptr->clear();
+}
+
+extern "C" uint64_t rtree_memory_dump(struct block_range_entry const ***entries,
+                                      uint8_t const ***bytes)
+{
+    uint64_t n, i;
+
+    pthread_rwlock_wrlock(&memory_rtree_lock);
+    n = i = memory_rtree_ptr->size();
+    *entries = static_cast<struct block_range_entry const **>(
+        malloc(sizeof(struct block_range_entry *) * n));
+    *bytes = static_cast<uint8_t const **>(
+        malloc(sizeof(uint8_t *) * n));
+    // XXX ensure allocation succeeded
+
+    for (auto itr = memory_rtree_ptr->begin(); itr != memory_rtree_ptr->end(); ++itr)
+    {
+        (*entries)[--i] = &(itr->second.first);
+        (*bytes)[i] = &(itr->second.second[0]);
+    }
+
     return n;
 }
