@@ -174,20 +174,20 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
 
 static int memory_to_storage()
 {
-    struct block_range_entry **entries;
+    struct block_range_entry *entries;
     uint8_t **bytes;
     uint64_t num_entries;
 
     // The aquisition of locks (memory then storage [via the insert
     // function]) is in the same order as in the query function, so
     // deadlocks should not be a concern.
-    num_entries = rtree_memory_dump((struct block_range_entry const ***)&entries, (uint8_t const ***)&bytes);
+    num_entries = rtree_memory_dump((struct block_range_entry **)&entries, (uint8_t const ***)&bytes);
 
     for (int i = 0; i < num_entries; ++i)
     {
         char addr_path[PATHLEN];
         VSILFILE *handle = NULL;
-        struct block_range_entry *entry = entries[i];
+        struct block_range_entry *entry = entries + i;
 
         entry_to_filename(entry, addr_path);
 
@@ -208,6 +208,7 @@ static int memory_to_storage()
         }
         else
         {
+            free(bytes[i]);
             VSIFCloseL(handle);
         }
 
@@ -216,9 +217,6 @@ static int memory_to_storage()
 
     free(entries);
     free(bytes);
-    rtree_memory_clear();
-
-    rtree_memory_mutex_unlock(false);
 
     return 0;
 }
