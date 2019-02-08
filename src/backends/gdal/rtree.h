@@ -44,7 +44,7 @@ extern "C"
                     struct block_range_entry_part **parts);
     uint64_t rtree_storage_dump(struct block_range_entry **entries);
     uint64_t rtree_memory_dump(struct block_range_entry **entries,
-                               const uint8_t ***bytes);
+                               uint8_t **bytes);
 
 #ifdef __cplusplus
 }
