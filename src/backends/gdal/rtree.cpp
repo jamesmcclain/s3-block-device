@@ -53,8 +53,8 @@ namespace bgm = boost::geometry::model;
 namespace bgi = boost::geometry::index;
 typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
 typedef bgm::box<point_t> range_t;
-typedef std::vector<uint8_t> byte_vector_t;
-typedef std::pair<range_t, std::pair<struct block_range_entry, byte_vector_t>> value_t;
+typedef std::deque<uint8_t> byte_sequence_t;
+typedef std::pair<range_t, std::pair<struct block_range_entry, byte_sequence_t>> value_t;
 typedef bgi::linear<16, 4> params_t;
 typedef bgi::indexable<value_t> indexable_t;
 typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
@@ -107,7 +107,7 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
                                const uint8_t *bytes) noexcept
 {
     auto query_range = range_t(point_t(start > 0 ? start - 1 : 0), point_t(end + 1));
-    auto byte_vector = byte_vector_t();
+    auto byte_vector = byte_sequence_t();
     auto intersects = bgi::intersects(query_range);
     auto candidates = std::vector<value_t>();
     uint64_t num_bytes = end - start + 1;
@@ -144,8 +144,8 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
             // https://en.cppreference.com/w/cpp/container/deque
             byte_vector.insert(
                 byte_vector.begin(),
-                std::move_iterator<byte_vector_t::iterator>(old_begin),
-                std::move_iterator<byte_vector_t::iterator>(old_begin + bytes_needed));
+                std::make_move_iterator(old_begin),
+                std::make_move_iterator(old_begin + bytes_needed));
             start = old_start;
         }
 
@@ -159,8 +159,8 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
 
             byte_vector.insert(
                 byte_vector.end(),
-                std::move_iterator<byte_vector_t::iterator>(old_fin - bytes_needed),
-                std::move_iterator<byte_vector_t::iterator>(old_fin));
+                std::make_move_iterator(old_fin - bytes_needed),
+                std::make_move_iterator(old_fin));
             end = old_end;
         }
     }
@@ -181,7 +181,7 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
 static int rtree_insert_storage(uint64_t start, uint64_t end, long sn) noexcept
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector_t());
+    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_sequence_t());
     auto value = std::make_pair(range, entry);
     int size;
 
@@ -209,7 +209,7 @@ extern "C" int rtree_insert(uint64_t start, uint64_t end, long sn,
 extern "C" int rtree_remove(uint64_t start, uint64_t end, long sn)
 {
     auto range = range_t(point_t(start), point_t(end));
-    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector_t());
+    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_sequence_t());
     auto value = std::make_pair(range, entry);
 
     pthread_rwlock_wrlock(&storage_rtree_lock);
