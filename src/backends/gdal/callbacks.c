@@ -174,40 +174,46 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
 
 static int memory_to_storage()
 {
-    struct block_range_entry **entries;
-    uint8_t **bytes;
+    struct block_range_entry *entries;
+    uint8_t *bytes;
+    uint8_t *original_bytes;
     uint64_t num_entries;
 
     // The aquisition of locks (memory then storage [via the insert
     // function]) is in the same order as in the query function, so
     // deadlocks should not be a concern.
-    num_entries = rtree_memory_dump((struct block_range_entry const ***)&entries, (uint8_t const ***)&bytes);
+    num_entries = rtree_memory_dump(
+        (struct block_range_entry **)&entries,
+        (uint8_t **)&bytes);
+    original_bytes = bytes;
 
     for (int i = 0; i < num_entries; ++i)
     {
         char addr_path[PATHLEN];
+        const struct block_range_entry *entry = entries + i;
+        const uint64_t entry_size = entry->end - entry->start + 1;
         VSILFILE *handle = NULL;
-        struct block_range_entry *entry = entries[i];
 
         entry_to_filename(entry, addr_path);
 
         // Attempt to open the resource for writing, then attempt to
         // write bytes into the file.
-        if ((handle = VSIFOpenL(addr_path, "w")) == NULL)
+        if ((handle = VSIFOpenL(addr_path, "w")) == NULL) // Open handle
         {
             free(entries);
-            free(bytes);
+            free(original_bytes);
             return -EIO;
         }
-        else if (VSIFWriteL(bytes[i], entry->end - entry->start + 1, 1, handle) != 1)
+        else if (VSIFWriteL(bytes, entry_size, 1, handle) != 1) // Write bytes
         {
             free(entries);
-            free(bytes);
+            free(original_bytes);
             VSIFCloseL(handle);
             return -EIO;
         }
-        else
+        else // Success
         {
+            bytes += entry_size;
             VSIFCloseL(handle);
         }
 
@@ -215,10 +221,7 @@ static int memory_to_storage()
     }
 
     free(entries);
-    free(bytes);
-    rtree_memory_clear();
-
-    rtree_memory_mutex_unlock(false);
+    free(original_bytes);
 
     return 0;
 }
