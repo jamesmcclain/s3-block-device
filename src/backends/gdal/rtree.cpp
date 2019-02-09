@@ -53,7 +53,8 @@ namespace bgm = boost::geometry::model;
 namespace bgi = boost::geometry::index;
 typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
 typedef bgm::box<point_t> range_t;
-typedef std::deque<uint8_t> byte_sequence_t;
+typedef std::vector<uint8_t> byte_vector_t;
+typedef std::deque<byte_vector_t> byte_sequence_t;
 typedef std::pair<range_t, std::pair<struct block_range_entry, byte_sequence_t>> value_t;
 typedef bgi::linear<16, 4> params_t;
 typedef bgi::indexable<value_t> indexable_t;
@@ -107,19 +108,25 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
                                const uint8_t *bytes) noexcept
 {
     auto query_range = range_t(point_t(start > 0 ? start - 1 : 0), point_t(end + 1));
-    auto byte_vector = byte_sequence_t();
+    auto byte_sequence = byte_sequence_t();
     auto intersects = bgi::intersects(query_range);
     auto candidates = std::vector<value_t>();
     uint64_t num_bytes = end - start + 1;
     int size;
 
-    if (bytes != nullptr)
+    // Store incoming bytes
+    byte_sequence.push_back(byte_vector_t());
     {
-        byte_vector.insert(byte_vector.end(), bytes, bytes + num_bytes);
-    }
-    else
-    {
-        byte_vector.resize(num_bytes);
+        auto &byte_vector = byte_sequence.front();
+
+        if (bytes != nullptr)
+        {
+            byte_vector.insert(byte_vector.end(), bytes, bytes + num_bytes);
+        }
+        else
+        {
+            byte_vector.resize(num_bytes);
+        }
     }
 
     pthread_rwlock_wrlock(&memory_rtree_lock);
@@ -130,47 +137,82 @@ static int rtree_insert_memory(uint64_t start, uint64_t end, long sn,
     {
         uint64_t old_start = itr->first.min_corner().get<0>();
         uint64_t old_end = itr->first.max_corner().get<0>();
-        auto old_byte_vector = itr->second.second;
+        auto old_byte_sequence = itr->second.second;
+        auto front_byte_sequence = byte_sequence_t();
+        auto back_byte_sequence = byte_sequence_t();
 
         // If the old range begins strictly before the new one,
         // then bytes from the old range must be added to the
         // beginning of this range.
-        if (old_start < start)
+        while (old_start < start)
         {
             uint64_t bytes_needed = start - old_start;
-            auto old_begin = old_byte_vector.begin();
+            const auto &old_front = old_byte_sequence.front();
 
             // https://en.cppreference.com/w/cpp/iterator/move_iterator
             // https://en.cppreference.com/w/cpp/container/deque
-            byte_vector.insert(
-                byte_vector.begin(),
-                std::make_move_iterator(old_begin),
-                std::make_move_iterator(old_begin + bytes_needed));
-            start = old_start;
+            if (bytes_needed >= old_front.size())
+            {
+                start -= old_front.size();
+                front_byte_sequence.push_back(std::move(old_front));
+                old_byte_sequence.pop_front();
+            }
+            else //if (bytes_needed < old_front.size())
+            {
+                front_byte_sequence.push_back(byte_vector_t());
+                auto &new_front = front_byte_sequence.back();
+
+                start -= bytes_needed;
+                new_front.insert(
+                    new_front.begin(),
+                    old_front.begin(),
+                    old_front.begin() + bytes_needed);
+            }
         }
 
         // If the old range ends strictly after the new one, then
         // bytes from the old range must be appended to the end of
         // this range.
-        if (end < old_end)
+        while (end < old_end)
         {
             uint64_t bytes_needed = old_end - end;
-            auto old_fin = old_byte_vector.end();
+            const auto &old_back = old_byte_sequence.back();
 
-            byte_vector.insert(
-                byte_vector.end(),
-                std::make_move_iterator(old_fin - bytes_needed),
-                std::make_move_iterator(old_fin));
-            end = old_end;
+            if (bytes_needed >= old_back.size())
+            {
+                end += old_back.size();
+                back_byte_sequence.push_front(std::move(old_back));
+                old_byte_sequence.pop_back();
+            }
+            else //if (bytes_needed < old_back.size())
+            {
+                back_byte_sequence.push_front(byte_vector_t());
+                auto &new_back = back_byte_sequence.front();
+
+                end += bytes_needed;
+                new_back.insert(
+                    new_back.begin(),
+                    old_back.end() - bytes_needed,
+                    old_back.end());
+            }
         }
+
+        byte_sequence.insert(
+            byte_sequence.begin(),
+            std::make_move_iterator(front_byte_sequence.begin()),
+            std::make_move_iterator(front_byte_sequence.end()));
+        byte_sequence.insert(
+            byte_sequence.end(),
+            std::make_move_iterator(back_byte_sequence.begin()),
+            std::make_move_iterator(back_byte_sequence.end()));
     }
 
     auto range = range_t(point_t(start), point_t(end));
-    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_vector);
+    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_sequence);
     auto value = std::make_pair(range, entry);
 
     memory_rtree_ptr->remove(candidates.begin(), candidates.end());
-    memory_rtree_ptr->insert(value);
+    memory_rtree_ptr->insert(std::move(value));
     size = memory_rtree_ptr->size();
 
     pthread_rwlock_unlock(&memory_rtree_lock);
@@ -186,7 +228,7 @@ static int rtree_insert_storage(uint64_t start, uint64_t end, long sn) noexcept
     int size;
 
     pthread_rwlock_wrlock(&storage_rtree_lock);
-    storage_rtree_ptr->insert(value);
+    storage_rtree_ptr->insert(std::move(value));
     size = storage_rtree_ptr->size();
     pthread_rwlock_unlock(&storage_rtree_lock);
 
