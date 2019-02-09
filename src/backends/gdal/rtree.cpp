@@ -407,14 +407,22 @@ extern "C" uint64_t rtree_storage_dump(block_range_entry **entries)
     uint64_t n, i;
 
     pthread_rwlock_rdlock(&storage_rtree_lock);
+
     n = i = static_cast<uint64_t>(storage_rtree_ptr->size());
     *entries = static_cast<struct block_range_entry *>(
         malloc(sizeof(struct block_range_entry) * n));
+    if (*entries == nullptr)
+    {
+        throw std::bad_alloc();
+    }
+
     for (auto itr = storage_rtree_ptr->begin(); itr != storage_rtree_ptr->end(); ++itr)
     {
         (*entries)[--i] = itr->second.first;
     }
+
     pthread_rwlock_unlock(&storage_rtree_lock);
+
     return n;
 }
 
@@ -430,8 +438,11 @@ extern "C" uint64_t rtree_memory_dump(struct block_range_entry **entries,
 
     for (auto itr = memory_rtree_ptr->begin(); itr != memory_rtree_ptr->end(); ++itr)
     {
-        const auto &byte_vector = itr->second.second;
-        buffer_size += byte_vector.size();
+        const auto &byte_sequence = itr->second.second;
+        for (const auto &byte_vector : byte_sequence)
+        {
+            buffer_size += byte_vector.size();
+        }
     }
 
     n = memory_rtree_ptr->size();
@@ -439,7 +450,7 @@ extern "C" uint64_t rtree_memory_dump(struct block_range_entry **entries,
         malloc(sizeof(struct block_range_entry) * n));
     *bytes = byte_ptr = static_cast<uint8_t *>(
         malloc(sizeof(uint8_t) * buffer_size));
-    if (entries == nullptr || bytes == nullptr)
+    if (*entries == nullptr || *bytes == nullptr)
     {
         throw std::bad_alloc();
     }
@@ -447,21 +458,14 @@ extern "C" uint64_t rtree_memory_dump(struct block_range_entry **entries,
     for (auto itr = memory_rtree_ptr->begin(); itr != memory_rtree_ptr->end(); ++itr)
     {
         const auto &entry = itr->second.first;
-        const auto &byte_vector = itr->second.second;
-        const uint64_t entry_size = entry.end - entry.start + 1;
+        const auto &byte_sequence = itr->second.second;
 
         (*entries)[i++] = entry;
-        std::copy(byte_vector.begin(), byte_vector.end(), byte_ptr); // XXX copying
-#if 0
-        auto v1 = std::vector<uint8_t>();
-        auto v2 = std::vector<uint8_t>();
-        v1.insert(v1.end(), byte_vector.begin(), byte_vector.end());
-        v2.insert(v2.end(), byte_ptr, byte_ptr + entry_size);
-        assert(v1.size() == v2.size());
-        assert(v1 == v2);
-        assert(entry_size == byte_vector.size());
-#endif
-        byte_ptr += entry_size;
+        for (const auto &byte_vector : byte_sequence)
+        {
+            std::copy(byte_vector.begin(), byte_vector.end(), byte_ptr);
+            byte_ptr += byte_vector.size();
+        }
     }
 
     memory_rtree_ptr->clear();
