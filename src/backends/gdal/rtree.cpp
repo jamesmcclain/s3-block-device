@@ -304,16 +304,29 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
         for (auto itr = memory_candidates.begin(); itr != memory_candidates.end(); ++itr)
         {
             auto entry = itr->second.first;
-            auto byte_vector = itr->second.second;
-            uint64_t intersection_start = std::max(entry.start, start);
-            uint64_t intersection_end = std::min(entry.end, end);
-            uint64_t skip_in_vector = intersection_start <= entry.start ? entry.start - intersection_start : 0;
-            uint64_t skip_in_buffer = intersection_start <= start ? start - intersection_start : 0;
-            auto vector_begin = byte_vector.begin() + skip_in_vector;
-            auto vector_end = vector_begin + (intersection_end - intersection_start + 1);
+            auto byte_sequence = itr->second.second;
+            const uint64_t intersection_start = std::max(entry.start, start);
+            const uint64_t skip_in_buffer = intersection_start <= start ? start - intersection_start : 0;
+            uint64_t skip_in_sequence = intersection_start <= entry.start ? entry.start - intersection_start : 0;
             auto buffer_begin = buf + skip_in_buffer;
 
-            std::copy(vector_begin, vector_end, buffer_begin);
+            for (const auto &byte_vector : byte_sequence)
+            {
+                if (skip_in_sequence >= byte_vector.size())
+                {
+                    skip_in_sequence -= byte_vector.size();
+                    continue;
+                }
+                else //if (skip_in_sequence < byte_vector.size())
+                {
+                    std::copy(
+                        byte_vector.begin() + skip_in_sequence,
+                        byte_vector.end(),
+                        buffer_begin);
+                    buffer_begin += (byte_vector.size() - skip_in_sequence);
+                    skip_in_sequence = 0;
+                }
+            }
         }
     }
 
@@ -355,7 +368,7 @@ extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
     *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * num_files));
     if (*parts == nullptr)
     {
-        exit(-1);
+        throw std::bad_alloc();
     }
 
     // Copy resulting intervals into the return array
