@@ -13,12 +13,12 @@ addons:
       update: true
       packages:
          - libfuse-dev
-         - libboost-dev
-         - libgdal-dev
+         # - libboost-dev
+         # - libgdal-dev
 
 env:
    - BOOST_ROOT=/usr/include CFLAGS='-Os' CXXFLAGS='-Os -std=c++14'
 
 script:
    - make
-   - make lib/libs3bd_gdal.so
+   # - make lib/libs3bd_gdal.so
