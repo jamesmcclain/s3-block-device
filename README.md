@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/jamesmcclain/s3-block-device.svg?branch=master)](https://travis-ci.org/jamesmcclain/s3-block-device)
+
 # s3-block-device #
 
 This project uses [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to expose a block "device" (actually just a file), possibly backed by remote resources, on which a filesystem with full semantics can be created.

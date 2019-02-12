@@ -1,0 +1,24 @@
+sudo: required
+
+dist: xenial
+
+language:
+   - cpp
+
+compiler:
+   - gcc
+
+addons:
+   apt:
+      update: true
+      packages:
+         - libfuse-dev
+         # - libboost-dev
+         # - libgdal-dev
+
+env:
+   - BOOST_ROOT=/usr/include CFLAGS='-Os' CXXFLAGS='-Os -std=c++14'
+
+script:
+   - make
+   # - make lib/libs3bd_gdal.so
