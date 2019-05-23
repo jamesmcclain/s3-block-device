@@ -43,7 +43,7 @@ mkfs.ext2 -b 4096 /tmp/mnt/blocks
 sudo mount -o loop /tmp/mnt/blocks /tmp/mnt2
 ```
 
-The first command create three directories: a directory to contain block files, a directory on-which to mount our FUSE file system, and a directory on-which to mount our ext2 filesystem.
+The first command creates three directories: a directory to contain block files, a directory on which to mount our FUSE file system, and a directory on which to mount our ext2 filesystem.
 
 The second command mounts our FUSE file system at `/tmp/mnt`.
 There is a file under that directory called `/tmp/mnt/blocks`, and those blocks are backed by the local directory `/tmp/blockdir`.
