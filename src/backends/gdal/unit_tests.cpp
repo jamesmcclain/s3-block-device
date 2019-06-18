@@ -86,6 +86,23 @@ BOOST_AUTO_TEST_CASE(rtree_memory_contents_merge_test)
     rtree_deinit();
 }
 
+BOOST_AUTO_TEST_CASE(rtree_memory_adjacent_merge_test)
+{
+    uint8_t zeros[] = {0, 0, 0};
+    uint8_t ones[] = {1, 1, 1};
+    uint8_t actual[6];
+    auto expected = std::vector<uint8_t>{1, 1, 1, 0, 0, 0};
+    struct block_range_entry_part *results;
+
+    rtree_init();
+    BOOST_TEST(rtree_insert(2, 4, 0, true, ones) == 1);
+    BOOST_TEST(rtree_insert(5, 7, 1, true, zeros) == 1);
+    rtree_query(2, 6, actual, &results);
+    free(results);
+    BOOST_TEST(std::vector<uint8_t>(actual, actual + 6) == expected);
+    rtree_deinit();
+}
+
 BOOST_AUTO_TEST_CASE(rtree_memory_storage_query_test)
 {
     struct block_range_entry_part *results;
