@@ -22,12 +22,12 @@
  * THE SOFTWARE.
  */
 
-#define BOOST_TEST_MODULE R - tree Tests
+#define BOOST_TEST_MODULE Storage Tests
 #include <boost/test/included/unit_test.hpp>
 
 #include <vector>
 
-#include "rtree.h"
+#include "storage.h"
 
 BOOST_AUTO_TEST_CASE(rtree_init_test)
 {

@@ -35,7 +35,7 @@
 #include <gdal.h>
 #include <cpl_vsi.h>
 
-#include "rtree.h"
+#include "storage.h"
 #include "block_range_entry.h"
 #include "../backend.h"
 

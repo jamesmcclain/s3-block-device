@@ -34,11 +34,11 @@ extern "C"
 {
 #endif
 
-    int rtree_init();
-    int rtree_deinit();
-    int rtree_insert(uint64_t start, uint64_t end, long sn,
+    int storage_init();
+    int storage_deinit();
+    int storage_insert(uint64_t start, uint64_t end, long sn,
                      bool memory, const uint8_t *bytes);
-    int rtree_remove(uint64_t start, uint64_t end, long sn);
+    int storage_remove(uint64_t start, uint64_t end, long sn);
     uint64_t rtree_size(bool memory);
     int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
                     struct block_range_entry_part **parts);
