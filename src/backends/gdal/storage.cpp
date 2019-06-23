@@ -25,396 +25,383 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cstdint>
+
 #include <algorithm>
-#include <deque>
-#include <exception>
-#include <vector>
+#include <cassert>
+#include <map>
+
+#include <gdal.h>
+#include <cpl_vsi.h>
 #include <pthread.h>
 
-// https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples/index_stored_in_mapped_file_using_boost_interprocess.html
-// https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/spatial_indexes/rtree_examples.html
-// https://www.boost.org/doc/libs/1_69_0/libs/geometry/doc/html/geometry/reference/spatial_indexes/boost__geometry__index__rtree.html
-#include <boost/interprocess/managed_mapped_file.hpp>
-#include <boost/geometry.hpp>
-#include <boost/geometry/geometries/point.hpp>
-#include <boost/geometry/geometries/box.hpp>
-#include <boost/geometry/index/rtree.hpp>
-
-// https://www.boost.org/doc/libs/1_69_0/libs/icl/doc/html/index.html
-#include <boost/icl/interval_map.hpp>
-
 #include "storage.h"
-#include "block_range_entry.h"
 
-// Byte Vector
-typedef std::vector<uint8_t> byte_vector_t;
-typedef std::pair<struct block_range_entry, byte_vector_t> range_of_bytes_t;
-typedef std::vector<range_of_bytes_t> vector_of_ranges_of_bytes_t;
+constexpr uint64_t PAGE_SIZE = 0x1000;
+constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
+constexpr uint64_t EXTENT_SIZE = PAGE_SIZE << 10;
+constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
 
-// R-tree
-namespace bi = boost::interprocess;
-namespace bg = boost::geometry;
-namespace bgm = boost::geometry::model;
-namespace bgi = boost::geometry::index;
-typedef bgm::point<uint64_t, 1, bg::cs::cartesian> point_t;
-typedef bgm::box<point_t> range_t;
-typedef std::pair<range_t, struct block_range_entry> value_t;
-typedef bgi::linear<16, 4> params_t;
-typedef bgi::indexable<value_t> indexable_t;
-typedef bgi::rtree<value_t, params_t, indexable_t> rtree_t;
+struct disk_page
+{
+    uint8_t bytes[PAGE_SIZE]; // XXX maybe a pointer
 
-// Intervals
-namespace icl = boost::icl;
-typedef icl::interval_map<uint64_t, block_range_entry> secondary_storage_map_t;
-typedef icl::interval<uint64_t> addr_interval_t;
+    disk_page() : bytes{} {};
+    disk_page(const uint8_t *);
+    disk_page &operator=(disk_page &&rhs) = default;
+};
 
-// Memory
-static vector_of_ranges_of_bytes_t *memory_ptr = nullptr;
-static pthread_rwlock_t memory_lock = PTHREAD_RWLOCK_INITIALIZER;
+disk_page::disk_page(const uint8_t *bytes)
+{
+    memcpy(this->bytes, bytes, PAGE_SIZE);
+}
 
-// Secondary Storage
-static rtree_t *secondary_storage_rtree_ptr = nullptr;
-static pthread_rwlock_t secondary_storage_rtree_lock = PTHREAD_RWLOCK_INITIALIZER;
+struct disk_extent
+{
+    bool dirty;
+    pthread_rwlock_t lock;
+    uint8_t bytes[EXTENT_SIZE]; // XXX maybe a pointer
+
+    disk_extent() : dirty(true), lock(PTHREAD_RWLOCK_INITIALIZER), bytes{} {};
+    disk_extent(uint64_t extent_tag, VSILFILE *handle);
+    disk_extent &operator=(disk_extent &&rhs) = default;
+};
+
+disk_extent::disk_extent(uint64_t extent_tag, VSILFILE *handle) : dirty(false), lock(PTHREAD_RWLOCK_INITIALIZER)
+{
+    if (handle != NULL)
+    {
+        if (VSIFReadL(this->bytes, EXTENT_SIZE, 1, handle) != 1)
+        {
+            fprintf(stderr, "%016lX openable but not readable\n", extent_tag);
+            memset(this->bytes, 0, EXTENT_SIZE);
+        }
+    }
+    else if (handle == NULL)
+    {
+        memset(this->bytes, 0, EXTENT_SIZE);
+    }
+}
+
+typedef std::map<uint64_t, struct disk_page> page_map_t;
+typedef std::map<uint64_t, struct disk_extent> extent_map_t;
+
+static page_map_t *page_map = nullptr;
+static pthread_rwlock_t page_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+static extent_map_t *extent_map = nullptr;
+static pthread_rwlock_t extent_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+static const char *blockdir = nullptr;
 
 /**
  * Initialize storage.
+ *
+ * @param _blockdir A pointer to a string giving the path to the storage directory
  */
-extern "C" int storage_init()
+extern "C" void storage_init(const char *_blockdir)
 {
-    if (secondary_storage_rtree_ptr == nullptr)
-    {
-        secondary_storage_rtree_ptr = new rtree_t();
-    }
-    if (memory_ptr == nullptr)
-    {
-        memory_ptr = new vector_of_ranges_of_bytes_t();
-    }
+    assert(_blockdir != nullptr);
+    blockdir = _blockdir;
 
-    if (secondary_storage_rtree_ptr == nullptr || memory_ptr == nullptr)
+    if (page_map == nullptr)
+    {
+        page_map = new page_map_t();
+    }
+    if (extent_map == nullptr)
+    {
+        extent_map = new extent_map_t();
+    }
+    if (page_map == nullptr || extent_map == nullptr)
     {
         throw std::bad_alloc();
     }
-
-    return 1;
 }
 
 /**
  * Deinitialize storage.
  */
-extern "C" int storage_deinit()
+extern "C" void storage_deinit()
 {
-    if (secondary_storage_rtree_ptr != nullptr)
+    if (page_map != nullptr)
     {
-        delete secondary_storage_rtree_ptr;
-        secondary_storage_rtree_ptr = nullptr;
+        delete page_map;
+        page_map = nullptr;
     }
-    if (memory_ptr != nullptr)
+    if (extent_map != nullptr)
     {
-        delete memory_ptr;
-        memory_ptr = nullptr;
+        delete extent_map;
+        extent_map = nullptr;
     }
-    return 1;
 }
 
 /**
- * Insert the bytes into the in-memory cache.
+ * Read an extent from external storage.
  *
- * @param start The starting offset of of the byte range
- * @param end The ending offset of the byte range (inclusive)
- * @param sn The serial number of the range of bytes
- * @param bytes The range of bytes to insert
- * @return The number of ranges in the in-memory cache
+ * @param extent_tag The tag of the extent to read from storage
+ * @return Boolean indicating success or failure
  */
-static int insert_into_memory(uint64_t start, uint64_t end, long sn,
-                              const uint8_t *bytes) noexcept
+static bool extent_read(uint64_t extent_tag)
 {
-    assert(start <= end);
+    assert(extent_tag == (extent_tag & (~EXTENT_MASK))); // Assert alignment to extent size
 
-    auto entry = block_range_entry(start, end, sn);
-    auto vbytes = byte_vector_t(end - start + 1);
-    auto range_of_bytes = std::make_pair(entry, vbytes);
-    int size = 0;
+    auto count = extent_map->count(extent_tag);
+    assert((0 <= count) && (count < 2));
 
-    vbytes.insert(range_of_bytes.second.begin(), bytes, bytes + (end - start + 1));
-    pthread_rwlock_wrlock(&memory_lock);
-    memory_ptr->push_back(std::move(range_of_bytes));
-    size = memory_ptr->size();
-    pthread_rwlock_unlock(&memory_lock);
+    if (count == 1) // Extent already exists
+    {
+        return true;
+    }
+    else // if (count == 0) // Extent needs to be read
+    {
+        char filename[0x100];
+        VSILFILE *handle = NULL;
 
-    return size;
+        sprintf(filename, "%s/%016lX", blockdir, extent_tag);
+
+        handle = VSIFOpenL(filename, "r");
+        extent_map->operator[](extent_tag) = std::move(disk_extent(extent_tag, handle));
+        VSIFCloseL(handle);
+        return true;
+    }
 }
 
 /**
- * Insert an entry into the secondary-storage R-Tree.
+ * Attempt to read and return a page or less worth of data.
  *
- * @param start The starting offset of the entry
- * @param end The ending offset of the entry (inclusive)
- * @param sn The serial number of the entry
- * @return The number of items in the R-Tree
+ * @param page_tag The tag of the page to read from
+ * @param size The number of bytes to read (must be <= the size of a page)
+ * @param bytes The array in which to return the bytes
+ * @return Boolean indicating success or failure
  */
-static int insert_into_storage(uint64_t start, uint64_t end, long sn) noexcept
+static bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 {
-    auto range = range_t(point_t(start), point_t(end));
-    auto entry = block_range_entry(start, end, sn);
-    auto value = std::make_pair(range, entry);
-    int size = 0;
+    assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
+    assert(size <= PAGE_SIZE);                     // Assert request size <= page size
 
-    pthread_rwlock_wrlock(&secondary_storage_rtree_lock);
-    secondary_storage_rtree_ptr->insert(std::move(value));
-    size = secondary_storage_rtree_ptr->size();
-    pthread_rwlock_unlock(&secondary_storage_rtree_lock);
+    pthread_rwlock_rdlock(&page_lock);
 
-    return size;
-}
+    auto count = page_map->count(page_tag);
+    assert((count <= 0) && (count < 2));
 
-/**
- * Insert a new range of bytes into the in-memory cache, or a new
- * entry into secondary-storage R-Tree.  This could and perhaps should
- * be two completely separate functions.
- *
- * @param start The starting offset of the range or entry
- * @param end The ending offset of the range or entry (inclusive)
- * @param sn The serial number of the entry
- * @param memory If true store to memory, if false store to secondary storage
- * @param bytes The bytes to be written (ignored if memory != true)
- * @return The number of ranges (resp. entries) in the cache (resp. storage)
- */
-extern "C" int storage_insert(uint64_t start, uint64_t end, long sn,
-                              bool memory, const uint8_t *bytes)
-{
-    if (memory)
+    if (count == 0)
     {
-        return insert_into_memory(start, end, sn, bytes);
-    }
-    else
-    {
-        return insert_into_storage(start, end, sn);
-    }
-}
+        auto extent_tag = page_tag & (~EXTENT_MASK);
+        auto extent_offset = page_tag & EXTENT_MASK;
 
-extern "C" int storage_remove(uint64_t start, uint64_t end, long sn)
-{
-    auto range = range_t(point_t(start), point_t(end));
-    auto entry = std::make_pair(block_range_entry(start, end, sn), byte_sequence_t());
-    auto value = std::make_pair(range, entry);
-
-    pthread_rwlock_wrlock(&secondary_storage_rtree_lock);
-    secondary_storage_rtree_ptr->remove(value);
-    pthread_rwlock_unlock(&secondary_storage_rtree_lock);
-    return secondary_storage_rtree_ptr->size();
-}
-
-extern "C" uint64_t rtree_size(bool memory)
-{
-    uint64_t size;
-    rtree_t *rtree_ptr = nullptr;
-    pthread_rwlock_t *lock_ptr;
-
-    if (memory)
-    {
-        rtree_ptr = memory_ptr;
-        lock_ptr = &memory_lock;
-    }
-    else
-    {
-        rtree_ptr = secondary_storage_rtree_ptr;
-        lock_ptr = &secondary_storage_rtree_lock;
-    }
-
-    pthread_rwlock_rdlock(lock_ptr);
-    size = static_cast<uint64_t>(rtree_ptr->size());
-    pthread_rwlock_unlock(lock_ptr);
-
-    return size;
-}
-
-extern "C" int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
-                           block_range_entry_part **parts)
-{
-    auto range = range_t(point_t(start), point_t(end));
-    auto intersects = bgi::intersects(range);
-    auto storage_candidates = std::vector<value_t>();
-    auto memory_candidates = std::vector<value_t>();
-    secondary_storage_map_t file_map;
-
-    pthread_rwlock_rdlock(&memory_lock);
-
-    // Read relevant ranges of bytes from in-memory data structure
-    memory_ptr->query(intersects, std::back_inserter(memory_candidates));
-
-    // Copy ranges of bytes into the provided return buffer
-    if (buf != nullptr)
-    {
-        for (auto itr = memory_candidates.begin(); itr != memory_candidates.end(); ++itr)
+        pthread_rwlock_wrlock(&extent_lock);
+        if (extent_read(extent_tag) != true)
         {
-            auto entry = itr->second.first;
-            auto byte_sequence = itr->second.second;
-            const uint64_t intersection_start = std::max(entry.start, start);
-            const uint64_t skip_in_buffer = intersection_start <= start ? start - intersection_start : 0;
-            uint64_t skip_in_sequence = intersection_start <= entry.start ? entry.start - intersection_start : 0;
-            auto buffer_begin = buf + skip_in_buffer;
+            return false;
+        }
 
-            for (const auto &byte_vector : byte_sequence)
+        auto extent_itr = extent_map->find(extent_tag);
+        if (extent_itr == extent_map->end())
+        {
+            pthread_rwlock_unlock(&extent_lock);
+            pthread_rwlock_unlock(&page_lock);
+            return false;
+        }
+        else
+        {
+            pthread_rwlock_rdlock(&(extent_itr->second.lock));
+            memcpy(bytes, extent_itr->second.bytes + extent_offset, size);
+            pthread_rwlock_unlock(&(extent_itr->second.lock));
+            pthread_rwlock_unlock(&extent_lock);
+            pthread_rwlock_unlock(&page_lock);
+            return true;
+        }
+    }
+    else //if (count == 1)
+    {
+        const auto itr = page_map->find(page_tag);
+        if (itr == page_map->end())
+        {
+            pthread_rwlock_unlock(&page_lock);
+            return false;
+        }
+        else
+        {
+            memcpy(bytes, itr->second.bytes, size);
+            pthread_rwlock_unlock(&page_lock);
+            return true;
+        }
+    }
+}
+
+/**
+ * Attempt to write a page or less worth of data.
+ *
+ * @param page_tag The tag of the page to write from
+ * @param size The number of bytes to write (must be <= the size of a page)
+ * @param bytes The array from which to write the bytes
+ * @return Boolean indicating success or failure
+ */
+static bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *bytes)
+{
+    assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
+    assert(size <= PAGE_SIZE);                     // Assert request size <= page size
+
+    if (size == PAGE_SIZE)
+    {
+        pthread_rwlock_wrlock(&page_lock);
+        page_map->operator[](page_tag) = std::move(disk_page(bytes));
+        pthread_rwlock_unlock(&page_lock);
+        return true;
+    }
+    else //if (size < PAGE_SIZE)
+    {
+        pthread_rwlock_wrlock(&page_lock);
+        auto count = page_map->count(page_tag);
+        assert((count <= 0) && (count < 2));
+
+        if (count == 0)
+        {
+            auto extent_tag = page_tag & (~EXTENT_MASK);
+            auto extent_offset = page_tag & EXTENT_MASK;
+
+            pthread_rwlock_wrlock(&extent_lock);
+            if (extent_read(extent_tag) != true)
             {
-                if (skip_in_sequence >= byte_vector.size())
-                {
-                    skip_in_sequence -= byte_vector.size();
-                    continue;
-                }
-                else //if (skip_in_sequence < byte_vector.size())
-                {
-                    std::copy(
-                        byte_vector.begin() + skip_in_sequence,
-                        byte_vector.end(),
-                        buffer_begin);
-                    buffer_begin += (byte_vector.size() - skip_in_sequence);
-                    skip_in_sequence = 0;
-                }
+                pthread_rwlock_unlock(&extent_lock);
+                pthread_rwlock_unlock(&page_lock);
+                return false;
+            }
+
+            auto extent_itr = extent_map->find(extent_tag);
+            if (extent_itr == extent_map->end())
+            {
+                pthread_rwlock_unlock(&extent_lock);
+                pthread_rwlock_unlock(&page_lock);
+                return false;
+            }
+            else
+            {
+                pthread_rwlock_rdlock(&(extent_itr->second.lock));
+                auto &pg = page_map->operator[](page_tag) = std::move(disk_page());
+                memcpy(pg.bytes, extent_itr->second.bytes + extent_offset, PAGE_SIZE);
+                memcpy(pg.bytes, bytes, size);
+                pthread_rwlock_unlock(&(extent_itr->second.lock));
+                pthread_rwlock_unlock(&extent_lock);
+                pthread_rwlock_unlock(&page_lock);
+                return true;
+            }
+        }
+        else //if (count == 1)
+        {
+            auto page_itr = page_map->find(page_tag);
+            if (page_itr == page_map->end())
+            {
+                pthread_rwlock_unlock(&page_lock);
+                return false;
+            }
+            else
+            {
+                memcpy(page_itr->second.bytes, bytes, size);
+                pthread_rwlock_unlock(&page_lock);
+                return true;
             }
         }
     }
-
-    pthread_rwlock_rdlock(&secondary_storage_rtree_lock);
-
-    // Query for relevant ranges of external-storage bytes
-    secondary_storage_rtree_ptr->query(intersects, std::back_inserter(storage_candidates));
-
-    // Insert results from the R-tree query into the interval map
-    // XXX insert directly into the file_map?
-    for (auto itr = storage_candidates.begin(); itr != storage_candidates.end(); ++itr)
-    {
-        uint64_t interval_start = itr->first.min_corner().get<0>();
-        uint64_t interval_end = itr->first.max_corner().get<0>();
-        auto addr_interval = addr_interval_t::closed(interval_start, interval_end);
-        auto pair = std::make_pair(addr_interval, itr->second.first);
-
-        file_map += pair;
-    }
-
-    // Subtract byte ranges found in the in-memory structure from the
-    // list of intervals that must be read from external storage.
-    for (auto itr = memory_candidates.begin(); itr != memory_candidates.end(); ++itr)
-    {
-        auto range = itr->first;
-        uint64_t interval_start = range.min_corner().get<0>();
-        uint64_t interval_end = range.max_corner().get<0>();
-        auto addr_interval = addr_interval_t::closed(interval_start, interval_end);
-
-        file_map -= addr_interval;
-    }
-
-    pthread_rwlock_unlock(&memory_lock);
-
-    // Allocate the return array for the list of ranges stored on
-    // external-storage.
-    uint64_t num_files = icl::interval_count(file_map);
-
-    *parts = static_cast<block_range_entry_part *>(malloc(sizeof(block_range_entry_part) * num_files));
-    if (*parts == nullptr)
-    {
-        throw std::bad_alloc();
-    }
-
-    // Copy resulting intervals into the return array
-    int i = 0;
-    for (auto itr = file_map.begin(); itr != file_map.end(); ++itr)
-    {
-        auto addr_interval = itr->first;
-        uint64_t interval_start = std::max(addr_interval.lower(), start);
-        uint64_t interval_end = std::min(addr_interval.upper(), end);
-        auto entry = itr->second;
-
-        // Close the interval
-        if (!icl::contains(addr_interval, interval_start))
-        {
-            interval_start += 1;
-        }
-        if (!icl::contains(addr_interval, interval_end))
-        {
-            interval_end -= 1;
-        }
-
-        if (interval_start <= interval_end)
-        {
-            auto part = block_range_entry_part(entry, interval_start, interval_end);
-            (*parts)[i++] = part;
-        }
-    }
-
-    pthread_rwlock_unlock(&secondary_storage_rtree_lock);
-
-    return i;
 }
 
-extern "C" uint64_t rtree_storage_dump(block_range_entry **entries)
+extern "C" int storage_read(uint64_t offset, size_t size, uint8_t *bytes)
 {
-    uint64_t n, i;
+    uint64_t page_tag = offset & (~PAGE_MASK);
 
-    pthread_rwlock_rdlock(&secondary_storage_rtree_lock);
-
-    n = i = static_cast<uint64_t>(secondary_storage_rtree_ptr->size());
-    *entries = static_cast<struct block_range_entry *>(
-        malloc(sizeof(struct block_range_entry) * n));
-    if (*entries == nullptr)
+    if (offset == page_tag) // if aligned
     {
-        throw std::bad_alloc();
+        int bytes_read = 0;
+        while (size > 0)
+        {
+            uint16_t size16 = size <= PAGE_SIZE ? static_cast<uint16_t>(size) : static_cast<uint16_t>(PAGE_SIZE);
+            if (aligned_page_read(offset, size16, bytes) == true)
+            {
+                offset += size16;
+                size -= size16;
+                bytes += size16;
+                bytes_read += size16;
+            }
+            else if (bytes_read == 0)
+            {
+                return -EIO;
+            }
+            else
+            {
+                return bytes_read;
+            }
+        }
+        return bytes_read;
     }
-
-    for (auto itr = secondary_storage_rtree_ptr->begin(); itr != secondary_storage_rtree_ptr->end(); ++itr)
+    else // if not aligned
     {
-        (*entries)[--i] = itr->second.first;
+        uint8_t page[PAGE_SIZE];
+        auto diff = offset - page_tag;
+        assert(diff < PAGE_SIZE);
+        auto left_in_page = PAGE_SIZE - diff;
+        uint16_t wanted = static_cast<uint16_t>(std::min(left_in_page, size));
+
+        if (aligned_page_read(page_tag, PAGE_SIZE, page) != true)
+        {
+            // If unable to read, report IO error
+            return -EIO;
+        }
+        else
+        {
+            // Otherwise report number of bytes read
+            memcpy(bytes, page + diff, wanted);
+            return static_cast<int>(wanted);
+        }
     }
-
-    pthread_rwlock_unlock(&secondary_storage_rtree_lock);
-
-    return n;
 }
 
-extern "C" uint64_t rtree_memory_dump(struct block_range_entry **entries,
-                                      uint8_t **bytes)
+extern "C" int storage_write(uint64_t offset, size_t size, const uint8_t *bytes)
 {
-    uint64_t n = 0;
-    uint64_t i = 0;
-    uint64_t buffer_size = 0;
-    uint8_t *byte_ptr = nullptr;
+    uint64_t page_tag = offset & (~PAGE_MASK);
 
-    pthread_rwlock_wrlock(&memory_lock);
-
-    for (auto itr = memory_ptr->begin(); itr != memory_ptr->end(); ++itr)
+    if (offset == page_tag) // if aligned
     {
-        const auto &byte_sequence = itr->second.second;
-        for (const auto &byte_vector : byte_sequence)
+        int bytes_written = 0;
+        while (size > 0)
         {
-            buffer_size += byte_vector.size();
+            uint16_t size16 = size <= PAGE_SIZE ? static_cast<uint16_t>(size) : static_cast<uint16_t>(PAGE_SIZE);
+            if (aligned_page_write(offset, size16, bytes) == true)
+            {
+                offset += size16;
+                size -= size16;
+                bytes += size16;
+                bytes_written += size16;
+            }
+            else if (bytes_written == 0)
+            {
+                return -EIO;
+            }
+            else
+            {
+                return bytes_written;
+            }
+        }
+        return bytes_written;
+    }
+    else // if not aligned
+    {
+        uint8_t page[PAGE_SIZE] = {};
+        auto diff = offset - page_tag;
+        assert(diff < PAGE_SIZE);
+        auto left_in_page = PAGE_SIZE - diff;
+        uint16_t wanted = static_cast<uint16_t>(std::min(left_in_page, size));
+
+        aligned_page_read(page_tag, PAGE_SIZE, page); // XXX in a race
+        memcpy(page + diff, bytes, wanted);
+        if (aligned_page_write(page_tag, wanted, page) != true)
+        {
+            // If not able to write, report IO error
+            return -EIO;
+        }
+        else
+        {
+            // Otherwise, report number of byte written
+            return static_cast<int>(wanted);
         }
     }
-
-    n = memory_ptr->size();
-    *entries = static_cast<struct block_range_entry *>(
-        malloc(sizeof(struct block_range_entry) * n));
-    *bytes = byte_ptr = static_cast<uint8_t *>(
-        malloc(sizeof(uint8_t) * buffer_size));
-    if (*entries == nullptr || *bytes == nullptr)
-    {
-        throw std::bad_alloc();
-    }
-
-    for (auto itr = memory_ptr->begin(); itr != memory_ptr->end(); ++itr)
-    {
-        const auto &entry = itr->second.first;
-        const auto &byte_sequence = itr->second.second;
-
-        (*entries)[i++] = entry;
-        for (const auto &byte_vector : byte_sequence)
-        {
-            std::copy(byte_vector.begin(), byte_vector.end(), byte_ptr);
-            byte_ptr += byte_vector.size();
-        }
-    }
-
-    memory_ptr->clear();
-
-    pthread_rwlock_unlock(&memory_lock);
-
-    return n;
 }

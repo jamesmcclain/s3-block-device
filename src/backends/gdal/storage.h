@@ -23,28 +23,19 @@
  */
 
 #include <stdint.h>
-#include <stdbool.h>
-#include "block_range_entry.h"
 
-#ifndef __RANGE_H__
-#define __RANGE_H__
+#ifndef __STORAGE_H__
+#define __STORAGE_H__
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-    int storage_init();
-    int storage_deinit();
-    int storage_insert(uint64_t start, uint64_t end, long sn,
-                     bool memory, const uint8_t *bytes);
-    int storage_remove(uint64_t start, uint64_t end, long sn);
-    uint64_t rtree_size(bool memory);
-    int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
-                    struct block_range_entry_part **parts);
-    uint64_t rtree_storage_dump(struct block_range_entry **entries);
-    uint64_t rtree_memory_dump(struct block_range_entry **entries,
-                               uint8_t **bytes);
+    void storage_init(const char *_blockdir);
+    void storage_deinit();
+    int storage_read(uint64_t offset, size_t size, uint8_t *bytes);
+    int storage_write(uint64_t offset, size_t size, const uint8_t *bytes);
 
 #ifdef __cplusplus
 }
