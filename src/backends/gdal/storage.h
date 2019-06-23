@@ -28,16 +28,27 @@
 #define __STORAGE_H__
 
 #ifdef __cplusplus
+constexpr uint64_t PAGE_SIZE = 0x1000;
+constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
+constexpr uint64_t EXTENT_SIZE = PAGE_SIZE << 10;
+constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
+
 extern "C"
 {
 #endif
 
     void storage_init(const char *_blockdir);
     void storage_deinit();
-    int storage_read(uint64_t offset, size_t size, uint8_t *bytes);
-    int storage_write(uint64_t offset, size_t size, const uint8_t *bytes);
+    int storage_read(off_t offset, size_t size, uint8_t *bytes);
+    int storage_write(off_t offset, size_t size, const uint8_t *bytes);
 
 #ifdef __cplusplus
 }
+
+bool extent_read(uint64_t extent_tag);
+bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes);
+bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *bytes);
+const void *debug_extent_address(uint64_t extent_tag);
+
 #endif
 #endif

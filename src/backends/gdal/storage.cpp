@@ -33,14 +33,10 @@
 
 #include <gdal.h>
 #include <cpl_vsi.h>
+
 #include <pthread.h>
 
 #include "storage.h"
-
-constexpr uint64_t PAGE_SIZE = 0x1000;
-constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
-constexpr uint64_t EXTENT_SIZE = PAGE_SIZE << 10;
-constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
 
 struct disk_page
 {
@@ -135,13 +131,19 @@ extern "C" void storage_deinit()
     }
 }
 
+const void *debug_extent_address(uint64_t extent_tag)
+{
+    const auto &e = extent_map->operator[](extent_tag);
+    return e.bytes;
+}
+
 /**
  * Read an extent from external storage.
  *
  * @param extent_tag The tag of the extent to read from storage
  * @return Boolean indicating success or failure
  */
-static bool extent_read(uint64_t extent_tag)
+bool extent_read(uint64_t extent_tag)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK))); // Assert alignment to extent size
 
@@ -161,7 +163,10 @@ static bool extent_read(uint64_t extent_tag)
 
         handle = VSIFOpenL(filename, "r");
         extent_map->operator[](extent_tag) = std::move(disk_extent(extent_tag, handle));
-        VSIFCloseL(handle);
+        if (handle != NULL)
+        {
+            VSIFCloseL(handle);
+        }
         return true;
     }
 }
@@ -174,7 +179,7 @@ static bool extent_read(uint64_t extent_tag)
  * @param bytes The array in which to return the bytes
  * @return Boolean indicating success or failure
  */
-static bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
+bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
     assert(size <= PAGE_SIZE);                     // Assert request size <= page size
@@ -182,7 +187,7 @@ static bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
     pthread_rwlock_rdlock(&page_lock);
 
     auto count = page_map->count(page_tag);
-    assert((count <= 0) && (count < 2));
+    assert((0 <= count) && (count < 2));
 
     if (count == 0)
     {
@@ -237,7 +242,7 @@ static bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
  * @param bytes The array from which to write the bytes
  * @return Boolean indicating success or failure
  */
-static bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *bytes)
+bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
     assert(size <= PAGE_SIZE);                     // Assert request size <= page size
@@ -253,7 +258,7 @@ static bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *
     {
         pthread_rwlock_wrlock(&page_lock);
         auto count = page_map->count(page_tag);
-        assert((count <= 0) && (count < 2));
+        assert((0 <= count) && (count < 2));
 
         if (count == 0)
         {
@@ -305,17 +310,25 @@ static bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *
     }
 }
 
-extern "C" int storage_read(uint64_t offset, size_t size, uint8_t *bytes)
+/**
+ * Read bytes from storage.  Aligned reads are preferred.
+ *
+ * @param offset The virtual block device offset to read from
+ * @param size The number of bytes to read
+ * @param bytes The buffer to read bytes into
+ * @return The number of bytes read or a negative errno
+ */
+extern "C" int storage_read(off_t offset, size_t size, uint8_t *bytes)
 {
     uint64_t page_tag = offset & (~PAGE_MASK);
 
-    if (offset == page_tag) // if aligned
+    if (static_cast<uint64_t>(offset) == page_tag) // if aligned
     {
         int bytes_read = 0;
         while (size > 0)
         {
             uint16_t size16 = size <= PAGE_SIZE ? static_cast<uint16_t>(size) : static_cast<uint16_t>(PAGE_SIZE);
-            if (aligned_page_read(offset, size16, bytes) == true)
+            if (aligned_page_read(page_tag, size16, bytes) == true)
             {
                 offset += size16;
                 size -= size16;
@@ -355,17 +368,25 @@ extern "C" int storage_read(uint64_t offset, size_t size, uint8_t *bytes)
     }
 }
 
-extern "C" int storage_write(uint64_t offset, size_t size, const uint8_t *bytes)
+/**
+ * Write bytes to storage.  Aligned writes are prefferred.
+ *
+ * @param offset The virtual block device offset to write to
+ * @param size The number of bytes to write
+ * @param bytes The buffer to read bytes from
+ * @return The number of bytes written or a negative errno
+ */
+extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
 {
     uint64_t page_tag = offset & (~PAGE_MASK);
 
-    if (offset == page_tag) // if aligned
+    if (static_cast<uint64_t>(offset) == page_tag) // if aligned
     {
         int bytes_written = 0;
         while (size > 0)
         {
             uint16_t size16 = size <= PAGE_SIZE ? static_cast<uint16_t>(size) : static_cast<uint16_t>(PAGE_SIZE);
-            if (aligned_page_write(offset, size16, bytes) == true)
+            if (aligned_page_write(page_tag, size16, bytes) == true)
             {
                 offset += size16;
                 size -= size16;
@@ -393,7 +414,7 @@ extern "C" int storage_write(uint64_t offset, size_t size, const uint8_t *bytes)
 
         aligned_page_read(page_tag, PAGE_SIZE, page); // XXX in a race
         memcpy(page + diff, bytes, wanted);
-        if (aligned_page_write(page_tag, wanted, page) != true)
+        if (aligned_page_write(page_tag, PAGE_SIZE, page) != true)
         {
             // If not able to write, report IO error
             return -EIO;

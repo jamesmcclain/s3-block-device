@@ -27,236 +27,252 @@
 
 #include <vector>
 
+#include <gdal.h>
+#include <cpl_vsi.h>
+
 #include "storage.h"
 
-BOOST_AUTO_TEST_CASE(rtree_init_test)
+constexpr uint64_t backed_extent_tag = 1 * EXTENT_SIZE;
+constexpr uint64_t unbacked_extent_tag = 0 * EXTENT_SIZE;
+
+BOOST_AUTO_TEST_CASE(storage_init_test)
 {
-    BOOST_TEST(rtree_init() == 1);
+    storage_init("/vsimem");
 }
 
-BOOST_AUTO_TEST_CASE(rtree_deinit_test)
+BOOST_AUTO_TEST_CASE(extent_read_backed)
 {
-    rtree_init();
-    BOOST_TEST(rtree_deinit() == 1);
+    uint8_t *extent;
+    char filename[0x100];
+
+    // Create a file to work with
+    sprintf(filename, "/vsimem/%016lX", backed_extent_tag);
+    VSILFILE *handle = VSIFOpenL(filename, "w");
+
+    // Create and extent and store it in the file
+    extent = new uint8_t[EXTENT_SIZE];
+    memset(extent, 0xaa, EXTENT_SIZE);
+    VSIFWriteL(extent, EXTENT_SIZE, 1, handle);
+    delete extent;
+
+    // Close the file
+    VSIFCloseL(handle);
+
+    extent_read(backed_extent_tag);
+    uint8_t byte1 = reinterpret_cast<const uint8_t *>(debug_extent_address(backed_extent_tag))[0];
+    uint8_t byte2 = reinterpret_cast<const uint8_t *>(debug_extent_address(backed_extent_tag))[33];
+    BOOST_TEST(byte1 == 0xaa);
+    BOOST_TEST(byte2 == 0xaa);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_insert_remove_storage_test)
+BOOST_AUTO_TEST_CASE(extent_read_unbacked)
 {
-    bool in_memory = false;
-
-    rtree_init();
-    BOOST_TEST(rtree_size(in_memory) == 0u);
-    BOOST_TEST(rtree_insert(0, 1, 0, in_memory, nullptr) == 1);
-    BOOST_TEST(rtree_size(in_memory) == 1u);
-    BOOST_TEST(rtree_remove(0, 1, 0) == 0);
-    BOOST_TEST(rtree_size(in_memory) == 0u);
-    rtree_deinit();
+    extent_read(unbacked_extent_tag);
+    uint8_t byte1 = reinterpret_cast<const uint8_t *>(debug_extent_address(unbacked_extent_tag))[0];
+    uint8_t byte2 = reinterpret_cast<const uint8_t *>(debug_extent_address(unbacked_extent_tag))[33];
+    BOOST_TEST(byte1 == 0x00);
+    BOOST_TEST(byte2 == 0x00);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_memory_range_merge_test)
+BOOST_AUTO_TEST_CASE(aligned_page_read_backed)
 {
-    bool in_memory = true;
+    uint8_t page[PAGE_SIZE] = {};
+    uint64_t page_tag = backed_extent_tag + (42 * PAGE_SIZE);
 
-    rtree_init();
-    BOOST_TEST(rtree_insert(3, 3, 0, in_memory, nullptr) == 1);
-    BOOST_TEST(rtree_insert(3, 3, 1, in_memory, nullptr) == 1);
-    BOOST_TEST(rtree_size(in_memory) == 1u);
-    BOOST_TEST(rtree_insert(5, 5, 2, in_memory, nullptr) == 2);
-    BOOST_TEST(rtree_size(in_memory) == 2u);
-    BOOST_TEST(rtree_insert(4, 4, 3, in_memory, nullptr) == 1);
-    BOOST_TEST(rtree_size(in_memory) == 1u);
-    rtree_deinit();
+    aligned_page_read(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0xaa);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0xaa);
+
+    memset(page, 0, PAGE_SIZE);
+
+    aligned_page_read(page_tag + (1 * PAGE_SIZE), PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0xaa);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0xaa);
+
+    memset(page, 0, PAGE_SIZE);
+
+    aligned_page_read(page_tag + (2 * PAGE_SIZE), PAGE_SIZE / 2, page);
+    BOOST_TEST(page[0] == 0xaa);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x00);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_memory_contents_merge_test)
+BOOST_AUTO_TEST_CASE(aligned_page_read_unbacked)
 {
-    uint8_t zeros[] = {0, 0, 0};
-    uint8_t ones[] = {1, 1, 1};
-    uint8_t actual[7];
-    auto expected = std::vector<uint8_t>{0, 0, 1, 1, 1, 0, 0};
-    struct block_range_entry_part *results;
+    uint8_t page[PAGE_SIZE] = {};
+    uint64_t page_tag = unbacked_extent_tag + (42 * PAGE_SIZE);
 
-    rtree_init();
-    BOOST_TEST(rtree_insert(2, 4, 0, true, zeros) == 1);
-    BOOST_TEST(rtree_insert(6, 8, 1, true, zeros) == 2);
-    BOOST_TEST(rtree_insert(4, 6, 2, true, ones) == 1);
-    rtree_query(2, 8, actual, &results);
-    free(results);
-    BOOST_TEST(std::vector<uint8_t>(actual, actual + 7) == expected);
-    rtree_deinit();
+    aligned_page_read(page_tag, PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0x00);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x00);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_memory_adjacent_merge_test)
+BOOST_AUTO_TEST_CASE(aligned_page_read_new)
 {
-    uint8_t zeros[] = {0, 0, 0};
-    uint8_t ones[] = {1, 1, 1};
-    uint8_t actual[6];
-    auto expected = std::vector<uint8_t>{1, 1, 1, 0, 0, 0};
-    struct block_range_entry_part *results;
+    uint8_t page[PAGE_SIZE] = {};
+    uint64_t page_tag = (2 * EXTENT_SIZE) + (42 * PAGE_SIZE);
 
-    rtree_init();
-    BOOST_TEST(rtree_insert(2, 4, 0, true, ones) == 1);
-    BOOST_TEST(rtree_insert(5, 7, 1, true, zeros) == 1);
-    rtree_query(2, 6, actual, &results);
-    free(results);
-    BOOST_TEST(std::vector<uint8_t>(actual, actual + 6) == expected);
-    rtree_deinit();
+    aligned_page_read(page_tag, PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0x00);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x00);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_memory_storage_query_test)
+BOOST_AUTO_TEST_CASE(aligned_page_write_backed)
 {
-    struct block_range_entry_part *results;
-    struct block_range_entry_part expected[] = {
-        block_range_entry_part(block_range_entry(0, 2, 0), 0, 0),
-        block_range_entry_part(block_range_entry(6, 9, 2), 8, 9)};
+    uint8_t page[PAGE_SIZE] = {};
+    uint64_t page_tag = backed_extent_tag + (107 * PAGE_SIZE);
 
-    rtree_init();
-    rtree_insert(0, 2, 0, false, nullptr);
-    rtree_insert(3, 5, 1, false, nullptr);
-    rtree_insert(6, 9, 2, false, nullptr);
-    rtree_insert(1, 7, 3, true, nullptr);
-    BOOST_TEST(rtree_query(0, 9, nullptr, &results) == 2);
-    for (int i = 0; i < 2; ++i)
-    {
-        BOOST_TEST(results[i] == expected[i]);
-    }
-    rtree_deinit();
+    memset(page, 0x01, PAGE_SIZE);
+
+    aligned_page_write(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
+    aligned_page_read(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0x01);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x01);
+
+    memset(page, 0x01, PAGE_SIZE);
+
+    aligned_page_write(page_tag + (1 * PAGE_SIZE), PAGE_SIZE / 2, page);
+    aligned_page_read(page_tag + (1 * PAGE_SIZE), PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0x01);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0xaa);
 }
 
-BOOST_AUTO_TEST_CASE(ext2_problem_test)
+BOOST_AUTO_TEST_CASE(aligned_page_write_new)
 {
-    const int N = 4096;
-    uint8_t buffer[N];
-    uint64_t sum = 0;
-    struct block_range_entry_part *results;
+    uint8_t page[PAGE_SIZE] = {};
+    uint64_t page_tag = 72 * EXTENT_SIZE;
 
-    memset(buffer, 0, N);
-    rtree_init();
-    rtree_insert(1024, N - 1, 0, true, nullptr);
-    buffer[0] = 1;
-    buffer[1024] = 1;
-    rtree_query(0, N - 1, buffer, &results);
-    free(results);
-    for (int i = 0; i < N; ++i)
-    {
-        sum += buffer[i];
-    }
-    BOOST_TEST(sum == 0u);
-    rtree_deinit();
+    memset(page, 0x01, PAGE_SIZE);
+
+    aligned_page_write(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
+    aligned_page_read(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0x01);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x01);
+
+    memset(page, 0x01, PAGE_SIZE);
+
+    aligned_page_write(page_tag + (1 * PAGE_SIZE), PAGE_SIZE / 2, page);
+    aligned_page_read(page_tag + (1 * PAGE_SIZE), PAGE_SIZE, page);
+    BOOST_TEST(page[0] == 0x01);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x00);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_query_result_size_storage_test)
+BOOST_AUTO_TEST_CASE(storage_read_unaligned_1)
 {
-    bool in_memory = false;
-    struct block_range_entry_part *results;
-    int num_results;
+    off_t offset = backed_extent_tag - 33;
+    size_t size = 2 * PAGE_SIZE + 3;
+    uint8_t bytes[size] = {};
+    int bytes_read = 0;
 
-    rtree_init();
-    rtree_insert(0, 5, 0, in_memory, nullptr);
-    rtree_insert(4, 7, 1, in_memory, nullptr);
+    memset(bytes, 0x55, size);
+    bytes_read = storage_read(offset, size, bytes);
 
-    BOOST_TEST((num_results = rtree_query(0, 3, nullptr, &results)) == 1);
-    free(results);
-
-    BOOST_TEST((num_results = rtree_query(0, 4, nullptr, &results)) == 2);
-    free(results);
-
-    BOOST_TEST((num_results = rtree_query(4, 5, nullptr, &results)) == 1);
-    free(results);
-
-    BOOST_TEST((num_results = rtree_query(5, 7, nullptr, &results)) == 1);
-    free(results);
-
-    BOOST_TEST((num_results = rtree_query(6, 7, nullptr, &results)) == 1);
-    free(results);
-
-    rtree_deinit();
+    BOOST_TEST(bytes_read == 33);
+    BOOST_TEST(bytes[0] == 0);
+    BOOST_TEST(bytes[bytes_read] == 0x55);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_query_result_interval_storage_test_1)
+BOOST_AUTO_TEST_CASE(storage_read_unaligned_2)
 {
-    bool in_memory = false;
-    struct block_range_entry_part *results;
-    int num_results;
+    off_t offset = backed_extent_tag + 33;
+    size_t size = 2 * PAGE_SIZE + 3;
+    uint8_t bytes[size] = {};
+    int bytes_read = 0;
 
-    rtree_init();
-    rtree_insert(0, 2, 0, in_memory, nullptr);
-    rtree_insert(1, 3, 1, in_memory, nullptr);
-    rtree_insert(2, -1, 2, in_memory, nullptr);
+    memset(bytes, 0x55, size);
+    bytes_read = storage_read(offset, size, bytes);
 
-    struct block_range_entry_part expected1[] = {
-        block_range_entry_part(block_range_entry(2, -1, 2), 3, 4)};
-
-    num_results = rtree_query(3, 4, nullptr, &results);
-    BOOST_TEST(num_results == 1);
-    for (int i = 0; i < num_results; ++i)
-    {
-        BOOST_TEST(results[i] == expected1[i]);
-    }
-    free(results);
-
-    struct block_range_entry_part expected2[] = {
-        block_range_entry_part(block_range_entry(0, 2, 0), 0, 0),
-        block_range_entry_part(block_range_entry(1, 3, 1), 1, 1),
-        block_range_entry_part(block_range_entry(2, -1, 2), 2, 3)};
-
-    num_results = rtree_query(0, 3, nullptr, &results);
-    BOOST_TEST(num_results == 3);
-    for (int i = 0; i < num_results; ++i)
-    {
-        BOOST_TEST(results[i] == expected2[i]);
-    }
-    free(results);
-
-    rtree_deinit();
+    BOOST_TEST(bytes_read == PAGE_SIZE - 33);
+    BOOST_TEST(bytes[0] == 0xaa);
+    BOOST_TEST(bytes[bytes_read] == 0x55);
 }
 
-BOOST_AUTO_TEST_CASE(rtree_query_result_interval_storage_test_2)
+BOOST_AUTO_TEST_CASE(storage_read_aligned)
 {
-    bool in_memory = false;
-    struct block_range_entry_part *results;
-    int num_results;
+    off_t offset = backed_extent_tag + (5 * PAGE_SIZE);
+    size_t size = 2 * PAGE_SIZE + 3;
+    uint8_t bytes[size] = {};
+    int bytes_read = 0;
 
-    rtree_init();
-    rtree_insert(0, 2, 0, in_memory, nullptr);
-    rtree_insert(1, 3, 2, in_memory, nullptr);
-    rtree_insert(2, -1, 1, in_memory, nullptr);
+    memset(bytes, 0x55, size);
+    bytes_read = storage_read(offset, size, bytes);
 
-    struct block_range_entry_part expected1[] = {
-        block_range_entry_part(block_range_entry(1, 3, 2), 3, 3),
-        block_range_entry_part(block_range_entry(2, -1, 1), 4, 4)};
+    BOOST_TEST(bytes_read == size);
+    BOOST_TEST(bytes[0] == 0xaa);
+    BOOST_TEST(bytes[bytes_read - 1] == 0xaa);
+}
 
-    num_results = rtree_query(3, 4, nullptr, &results);
-    BOOST_TEST(num_results == 2);
-    for (int i = 0; i < num_results; ++i)
-    {
-        BOOST_TEST(results[i] == expected1[i]);
-    }
-    free(results);
+BOOST_AUTO_TEST_CASE(storage_write_unaligned_1)
+{
+    size_t size = 2 * PAGE_SIZE + 3;
+    uint8_t bytes[size] = {};
+    int bytes_read = 0;
+    int bytes_written = 0;
 
-    struct block_range_entry_part expected2[] = {
-        block_range_entry_part(block_range_entry(0, 2, 0), 0, 0),
-        block_range_entry_part(block_range_entry(1, 3, 2), 1, 3),
-        block_range_entry_part(block_range_entry(2, -1, 1), 4, 4)};
+    memset(bytes, 0x55, size);
+    bytes_written = storage_write(backed_extent_tag - 33, size, bytes);
+    BOOST_TEST(bytes_written == 33);
 
-    num_results = rtree_query(0, 4, nullptr, &results);
-    BOOST_TEST(num_results == 3);
-    for (int i = 0; i < num_results; ++i)
-    {
-        BOOST_TEST(results[i] == expected2[i]);
-    }
-    free(results);
+    // Bytes written to this page
+    memset(bytes, 0, size);
+    bytes_read = storage_read(backed_extent_tag - PAGE_SIZE, PAGE_SIZE, bytes);
+    BOOST_TEST(bytes_read == PAGE_SIZE);
+    BOOST_TEST(bytes[0] == 0x00);
+    BOOST_TEST(bytes[bytes_read - 1] == 0x55);
 
-    struct block_range_entry_part expected3[] = {
-        block_range_entry_part(block_range_entry(1, 3, 2), 1, 3)};
+    // This page should be unchanged
+    memset(bytes, 0, size);
+    bytes_read = storage_read(backed_extent_tag, PAGE_SIZE, bytes);
+    BOOST_TEST(bytes_read == PAGE_SIZE);
+    BOOST_TEST(bytes[0] == 0xaa);
+    BOOST_TEST(bytes[bytes_read - 1] == 0xaa);
+}
 
-    num_results = rtree_query(1, 3, nullptr, &results);
-    BOOST_TEST(num_results == 1);
-    for (int i = 0; i < num_results; ++i)
-    {
-        BOOST_TEST(results[i] == expected3[i]);
-    }
-    free(results);
+BOOST_AUTO_TEST_CASE(storage_write_unaligned_2)
+{
+    size_t size = 2 * PAGE_SIZE + 3;
+    uint8_t bytes[size] = {};
+    int bytes_read = 0;
+    int bytes_written = 0;
 
-    rtree_deinit();
+    memset(bytes, 0x55, size);
+    bytes_written = storage_write(backed_extent_tag + (2 * PAGE_SIZE) + 33, size, bytes);
+    BOOST_TEST(bytes_written == PAGE_SIZE - 33);
+
+    // This page should be unchanged
+    memset(bytes, 0, size);
+    bytes_read = storage_read(backed_extent_tag + (1 * PAGE_SIZE), PAGE_SIZE, bytes);
+    BOOST_TEST(bytes_read == PAGE_SIZE);
+    BOOST_TEST(bytes[0] == 0xaa);
+    BOOST_TEST(bytes[bytes_read - 1] == 0xaa);
+
+    // Bytes written to this page
+    memset(bytes, 0, size);
+    bytes_read = storage_read(backed_extent_tag + (2 * PAGE_SIZE), PAGE_SIZE, bytes);
+    BOOST_TEST(bytes_read == PAGE_SIZE);
+    BOOST_TEST(bytes[0] == 0xaa);
+    BOOST_TEST(bytes[bytes_read - 1] == 0x55);
+}
+
+BOOST_AUTO_TEST_CASE(storage_write_aligned)
+{
+    off_t offset = backed_extent_tag + (3 * PAGE_SIZE);
+    size_t size = 2 * PAGE_SIZE + 3;
+    uint8_t bytes[size] = {};
+    int bytes_read = 0;
+    int bytes_written = 0;
+
+    memset(bytes, 0x55, size);
+    bytes_written = storage_write(offset, size, bytes);
+    BOOST_TEST(bytes_written == size);
+
+    memset(bytes, 0, size);
+    bytes_read = storage_read(offset, size, bytes);
+    BOOST_TEST(bytes_read == size);
+    BOOST_TEST(bytes[0] == 0x55);
+    BOOST_TEST(bytes[bytes_read - 1] == 0x55);
+}
+
+BOOST_AUTO_TEST_CASE(storage_deinit_test)
+{
+    storage_deinit();
 }
