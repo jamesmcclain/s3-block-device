@@ -49,7 +49,7 @@ BOOST_AUTO_TEST_CASE(extent_read_backed)
     sprintf(filename, "/vsimem/%016lX", backed_extent_tag);
     VSILFILE *handle = VSIFOpenL(filename, "w");
 
-    // Create and extent and store it in the file
+    // Create an extent and store it in the file
     extent = new uint8_t[EXTENT_SIZE];
     memset(extent, 0xaa, EXTENT_SIZE);
     VSIFWriteL(extent, EXTENT_SIZE, 1, handle);

@@ -40,44 +40,124 @@
 
 struct disk_page
 {
-    uint8_t bytes[PAGE_SIZE]; // XXX maybe a pointer
+    uint8_t *bytes;
 
-    disk_page() : bytes{} {};
-    disk_page(const uint8_t *);
-    disk_page &operator=(disk_page &&rhs) = default;
+    // constructor
+    disk_page() : bytes(new uint8_t[PAGE_SIZE])
+    {
+    }
+
+    // copy constructor
+    disk_page(const disk_page &rhs) : bytes(new uint8_t[PAGE_SIZE])
+    {
+        memcpy(bytes, rhs.bytes, PAGE_SIZE);
+    }
+
+    // move constructor
+    disk_page(disk_page &&rhs) noexcept : bytes(rhs.bytes)
+    {
+        rhs.bytes = nullptr;
+    }
+
+    disk_page(const uint8_t *bytes) : bytes(new uint8_t[PAGE_SIZE])
+    {
+        memcpy(this->bytes, bytes, PAGE_SIZE);
+    }
+
+    // destructor
+    ~disk_page()
+    {
+        if (bytes != nullptr)
+        {
+            delete bytes;
+            bytes = nullptr;
+        }
+    }
+
+    // copy assignment
+    disk_page &operator=(const disk_page &rhs)
+    {
+        memcpy(this->bytes, rhs.bytes, PAGE_SIZE);
+        return *this;
+    }
+
+    // move assignment
+    disk_page &operator=(disk_page &&rhs) noexcept
+    {
+        bytes = rhs.bytes;
+        rhs.bytes = nullptr;
+        return *this;
+    }
 };
-
-disk_page::disk_page(const uint8_t *bytes)
-{
-    memcpy(this->bytes, bytes, PAGE_SIZE);
-}
 
 struct disk_extent
 {
     bool dirty;
     pthread_rwlock_t lock;
-    uint8_t bytes[EXTENT_SIZE]; // XXX maybe a pointer
+    uint8_t *bytes;
 
-    disk_extent() : dirty(true), lock(PTHREAD_RWLOCK_INITIALIZER), bytes{} {};
-    disk_extent(uint64_t extent_tag, VSILFILE *handle);
-    disk_extent &operator=(disk_extent &&rhs) = default;
-};
-
-disk_extent::disk_extent(uint64_t extent_tag, VSILFILE *handle) : dirty(false), lock(PTHREAD_RWLOCK_INITIALIZER)
-{
-    if (handle != NULL)
+    // constructor
+    disk_extent() : dirty(false), lock(PTHREAD_RWLOCK_INITIALIZER), bytes(new uint8_t[EXTENT_SIZE])
     {
-        if (VSIFReadL(this->bytes, EXTENT_SIZE, 1, handle) != 1)
+    }
+
+    // copy constructor
+    disk_extent(const disk_extent &rhs) : dirty(rhs.dirty), lock(PTHREAD_RWLOCK_INITIALIZER), bytes(new uint8_t[EXTENT_SIZE])
+    {
+        memcpy(bytes, rhs.bytes, EXTENT_SIZE);
+    }
+
+    // move constructor
+    disk_extent(disk_extent &&rhs) noexcept : dirty(rhs.dirty), lock(PTHREAD_RWLOCK_INITIALIZER), bytes(rhs.bytes)
+    {
+        rhs.bytes = nullptr;
+    }
+
+    disk_extent(uint64_t extent_tag, VSILFILE *handle)
+        : dirty(false), lock(PTHREAD_RWLOCK_INITIALIZER)
+    {
+        bytes = new uint8_t[EXTENT_SIZE];
+        if (handle != NULL)
         {
-            fprintf(stderr, "%016lX openable but not readable\n", extent_tag);
+            if (VSIFReadL(this->bytes, EXTENT_SIZE, 1, handle) != 1)
+            {
+                fprintf(stderr, "%016lX openable but not readable\n", extent_tag);
+                memset(this->bytes, 0, EXTENT_SIZE);
+            }
+        }
+        else if (handle == NULL)
+        {
             memset(this->bytes, 0, EXTENT_SIZE);
         }
     }
-    else if (handle == NULL)
+
+    // destructor
+    ~disk_extent()
     {
-        memset(this->bytes, 0, EXTENT_SIZE);
+        if (bytes != nullptr)
+        {
+            delete bytes;
+            bytes = nullptr;
+        }
     }
-}
+
+    // copy assignment
+    disk_extent &operator=(const disk_extent &rhs)
+    {
+        dirty = rhs.dirty;
+        memcpy(this->bytes, rhs.bytes, EXTENT_SIZE);
+        return *this;
+    }
+
+    // move assignment
+    disk_extent &operator=(disk_extent &&rhs) noexcept
+    {
+        dirty = rhs.dirty;
+        bytes = rhs.bytes;
+        rhs.bytes = nullptr;
+        return *this;
+    }
+};
 
 typedef std::map<uint64_t, struct disk_page> page_map_t;
 typedef std::map<uint64_t, struct disk_extent> extent_map_t;
