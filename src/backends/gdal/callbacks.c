@@ -78,6 +78,7 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
 
 int s3bd_flush(const char *path, struct fuse_file_info *fi)
 {
+    storage_flush();
     return 0;
 }
 

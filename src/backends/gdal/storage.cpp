@@ -31,6 +31,12 @@
 #include <cassert>
 #include <map>
 
+#if 0
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#endif
+
 #include <gdal.h>
 #include <cpl_vsi.h>
 
@@ -41,25 +47,28 @@
 struct disk_page
 {
     uint8_t *bytes;
+    bool dirty;
 
     // constructor
-    disk_page() : bytes(new uint8_t[PAGE_SIZE])
+    disk_page() : bytes(new uint8_t[PAGE_SIZE]), dirty(false)
     {
+        memset(bytes, 0, PAGE_SIZE);
     }
 
     // copy constructor
-    disk_page(const disk_page &rhs) : bytes(new uint8_t[PAGE_SIZE])
+    disk_page(const disk_page &rhs) : bytes(new uint8_t[PAGE_SIZE]), dirty(rhs.dirty)
     {
         memcpy(bytes, rhs.bytes, PAGE_SIZE);
     }
 
     // move constructor
-    disk_page(disk_page &&rhs) noexcept : bytes(rhs.bytes)
+    disk_page(disk_page &&rhs) noexcept : bytes(rhs.bytes), dirty(rhs.dirty)
     {
         rhs.bytes = nullptr;
     }
 
-    disk_page(const uint8_t *bytes) : bytes(new uint8_t[PAGE_SIZE])
+    // bytes constructor
+    disk_page(const uint8_t *bytes) : bytes(new uint8_t[PAGE_SIZE]), dirty(false)
     {
         memcpy(this->bytes, bytes, PAGE_SIZE);
     }
@@ -77,7 +86,8 @@ struct disk_page
     // copy assignment
     disk_page &operator=(const disk_page &rhs)
     {
-        memcpy(this->bytes, rhs.bytes, PAGE_SIZE);
+        memcpy(bytes, rhs.bytes, PAGE_SIZE);
+        dirty = rhs.dirty;
         return *this;
     }
 
@@ -86,75 +96,7 @@ struct disk_page
     {
         bytes = rhs.bytes;
         rhs.bytes = nullptr;
-        return *this;
-    }
-};
-
-struct disk_extent
-{
-    bool dirty;
-    pthread_rwlock_t lock;
-    uint8_t *bytes;
-
-    // constructor
-    disk_extent() : dirty(false), lock(PTHREAD_RWLOCK_INITIALIZER), bytes(new uint8_t[EXTENT_SIZE])
-    {
-    }
-
-    // copy constructor
-    disk_extent(const disk_extent &rhs) : dirty(rhs.dirty), lock(PTHREAD_RWLOCK_INITIALIZER), bytes(new uint8_t[EXTENT_SIZE])
-    {
-        memcpy(bytes, rhs.bytes, EXTENT_SIZE);
-    }
-
-    // move constructor
-    disk_extent(disk_extent &&rhs) noexcept : dirty(rhs.dirty), lock(PTHREAD_RWLOCK_INITIALIZER), bytes(rhs.bytes)
-    {
-        rhs.bytes = nullptr;
-    }
-
-    disk_extent(uint64_t extent_tag, VSILFILE *handle)
-        : dirty(false), lock(PTHREAD_RWLOCK_INITIALIZER)
-    {
-        bytes = new uint8_t[EXTENT_SIZE];
-        if (handle != NULL)
-        {
-            if (VSIFReadL(this->bytes, EXTENT_SIZE, 1, handle) != 1)
-            {
-                fprintf(stderr, "%016lX openable but not readable\n", extent_tag);
-                memset(this->bytes, 0, EXTENT_SIZE);
-            }
-        }
-        else if (handle == NULL)
-        {
-            memset(this->bytes, 0, EXTENT_SIZE);
-        }
-    }
-
-    // destructor
-    ~disk_extent()
-    {
-        if (bytes != nullptr)
-        {
-            delete bytes;
-            bytes = nullptr;
-        }
-    }
-
-    // copy assignment
-    disk_extent &operator=(const disk_extent &rhs)
-    {
         dirty = rhs.dirty;
-        memcpy(this->bytes, rhs.bytes, EXTENT_SIZE);
-        return *this;
-    }
-
-    // move assignment
-    disk_extent &operator=(disk_extent &&rhs) noexcept
-    {
-        dirty = rhs.dirty;
-        bytes = rhs.bytes;
-        rhs.bytes = nullptr;
         return *this;
     }
 };
@@ -164,9 +106,6 @@ typedef std::map<uint64_t, struct disk_extent> extent_map_t;
 
 static page_map_t *page_map = nullptr;
 static pthread_rwlock_t page_lock = PTHREAD_RWLOCK_INITIALIZER;
-
-static extent_map_t *extent_map = nullptr;
-static pthread_rwlock_t extent_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 static const char *blockdir = nullptr;
 
@@ -184,11 +123,7 @@ extern "C" void storage_init(const char *_blockdir)
     {
         page_map = new page_map_t();
     }
-    if (extent_map == nullptr)
-    {
-        extent_map = new extent_map_t();
-    }
-    if (page_map == nullptr || extent_map == nullptr)
+    if (page_map == nullptr)
     {
         throw std::bad_alloc();
     }
@@ -204,52 +139,94 @@ extern "C" void storage_deinit()
         delete page_map;
         page_map = nullptr;
     }
-    if (extent_map != nullptr)
-    {
-        delete extent_map;
-        extent_map = nullptr;
-    }
-}
-
-const void *debug_extent_address(uint64_t extent_tag)
-{
-    const auto &e = extent_map->operator[](extent_tag);
-    return e.bytes;
 }
 
 /**
- * Read an extent from external storage.
- *
- * @param extent_tag The tag of the extent to read from storage
- * @return Boolean indicating success or failure
+ * Flush a page and all of its extent-mates to storage.  Only one
+ * instance of this function should ever be active at once.
  */
-bool extent_read(uint64_t extent_tag)
+bool flush_page_and_friends(uint64_t page_tag) // AAA confirmed working in the sense that the sequence of writes is reproduced on disk
 {
-    assert(extent_tag == (extent_tag & (~EXTENT_MASK))); // Assert alignment to extent size
+    assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
 
-    auto count = extent_map->count(extent_tag);
-    assert((0 <= count) && (count < 2));
+    uint8_t *extent = new uint8_t[EXTENT_SIZE];
 
-    if (count == 1) // Extent already exists
+    uint64_t extent_tag = (page_tag & (~EXTENT_MASK));
+
+    // Bring all pages in
+    for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
     {
-        return true;
+        uint64_t inner_offset = i * PAGE_SIZE;
+        aligned_page_read(extent_tag + inner_offset, PAGE_SIZE, extent + inner_offset);
     }
-    else // if (count == 0) // Extent needs to be read
+
+#if 0
+    if (extent_tag == 0x400000)
     {
-        char filename[0x100];
-        VSILFILE *handle = NULL;
+        int fd = open("/tmp/extent.mp3", O_RDWR);
+        write(fd, extent, EXTENT_SIZE);
+        close(fd);
+    }
+#endif
 
-        sprintf(filename, "%s/%016lX", blockdir, extent_tag);
+    // Open extent file
+    char filename[0x100];
+    VSILFILE *handle = NULL;
+    sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
+    if ((handle = VSIFOpenL(filename, "w")) == NULL)
+    {
+        delete extent;
+        return false;
+    }
 
-        handle = VSIFOpenL(filename, "r");
-        extent_map->operator[](extent_tag) = std::move(disk_extent(extent_tag, handle));
-        if (handle != NULL)
+    // Copy all pages out and remove them from page_map
+    pthread_rwlock_wrlock(&page_lock);
+    for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
+    {
+        uint64_t inner_offset = i * PAGE_SIZE;
+        uint64_t inner_page_tag = extent_tag + inner_offset;
+        while (VSIFWriteL(extent + inner_offset, PAGE_SIZE, 1, handle) != 1) // XXX
         {
-            VSIFCloseL(handle);
         }
-        return true;
+        page_map->erase(inner_page_tag);
+    }
+    VSIFFlushL(handle);
+    VSIFCloseL(handle);
+    pthread_rwlock_unlock(&page_lock);
+
+    delete extent;
+    return true;
+}
+
+void storage_flush()
+{
+    while (true)
+    {
+        pthread_rwlock_rdlock(&page_lock);
+        auto itr = page_map->begin();
+        if (itr == page_map->end())
+        {
+            pthread_rwlock_unlock(&page_lock);
+            return;
+        }
+        else
+        {
+            uint64_t page_tag = itr->first;
+            pthread_rwlock_unlock(&page_lock);
+            flush_page_and_friends(page_tag);
+        }
     }
 }
+
+#define LOCK_AND_GET_PAGE(fn)                              \
+    fn(&page_lock);                                        \
+    if (page_map->count(page_tag) > 0)                     \
+    {                                                      \
+        const auto &page = page_map->operator[](page_tag); \
+        memcpy(bytes, page.bytes, size);                   \
+        pthread_rwlock_unlock(&page_lock);                 \
+        return true;                                       \
+    }
 
 /**
  * Attempt to read and return a page or less worth of data.
@@ -264,54 +241,46 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
     assert(size <= PAGE_SIZE);                     // Assert request size <= page size
 
-    pthread_rwlock_rdlock(&page_lock);
+    LOCK_AND_GET_PAGE(pthread_rwlock_rdlock);
 
-    auto count = page_map->count(page_tag);
-    assert((0 <= count) && (count < 2));
+    pthread_rwlock_unlock(&page_lock);
 
-    if (count == 0)
+    LOCK_AND_GET_PAGE(pthread_rwlock_wrlock);
+
+    uint64_t extent_tag = (page_tag & (~EXTENT_MASK));
+    char filename[0x100];
+    VSILFILE *handle = NULL;
+
+    // Attempt to open extent file and attempt to load pages.  If not
+    // able to do so, create an empy page.
+    sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
+    handle = VSIFOpenL(filename, "r");
+    if (handle != NULL) // XXX distinguish between nonexistent and unopenable
     {
-        auto extent_tag = page_tag & (~EXTENT_MASK);
-        auto extent_offset = page_tag & EXTENT_MASK;
+        for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
+        {
+            uint64_t inner_offset = (i * PAGE_SIZE);
+            uint64_t inner_page_tag = extent_tag + inner_offset;
 
-        pthread_rwlock_wrlock(&extent_lock);
-        if (extent_read(extent_tag) != true)
-        {
-            return false;
+            if (page_map->count(inner_page_tag) < 1)
+            {
+                while (VSIFSeekL(handle, inner_offset, SEEK_SET) != 0) // XXX
+                {
+                }
+                while (VSIFReadL(page_map->operator[](inner_page_tag).bytes, PAGE_SIZE, 1, handle) != 1) // XXX
+                {
+                }
+            }
         }
+        VSIFCloseL(handle);
+    }
 
-        auto extent_itr = extent_map->find(extent_tag);
-        if (extent_itr == extent_map->end())
-        {
-            pthread_rwlock_unlock(&extent_lock);
-            pthread_rwlock_unlock(&page_lock);
-            return false;
-        }
-        else
-        {
-            pthread_rwlock_rdlock(&(extent_itr->second.lock));
-            memcpy(bytes, extent_itr->second.bytes + extent_offset, size);
-            pthread_rwlock_unlock(&(extent_itr->second.lock));
-            pthread_rwlock_unlock(&extent_lock);
-            pthread_rwlock_unlock(&page_lock);
-            return true;
-        }
-    }
-    else //if (count == 1)
-    {
-        const auto itr = page_map->find(page_tag);
-        if (itr == page_map->end())
-        {
-            pthread_rwlock_unlock(&page_lock);
-            return false;
-        }
-        else
-        {
-            memcpy(bytes, itr->second.bytes, size);
-            pthread_rwlock_unlock(&page_lock);
-            return true;
-        }
-    }
+    const auto &page = page_map->operator[](page_tag);
+    memcpy(bytes, page.bytes, size);
+
+    pthread_rwlock_unlock(&page_lock);
+
+    return true;
 }
 
 /**
@@ -322,76 +291,31 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
  * @param bytes The array from which to write the bytes
  * @return Boolean indicating success or failure
  */
-bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *bytes)
+bool aligned_page_write(uint64_t page_tag, const uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
-    assert(size <= PAGE_SIZE);                     // Assert request size <= page size
 
-    if (size == PAGE_SIZE)
+    uint64_t extent_tag = (page_tag & (~EXTENT_MASK));
+#if 0
+    if (extent_tag == 0x400000)
     {
-        pthread_rwlock_wrlock(&page_lock);
-        page_map->operator[](page_tag) = std::move(disk_page(bytes));
-        pthread_rwlock_unlock(&page_lock);
-        return true;
+        int fd = open("/tmp/write.mp3", O_RDWR);
+        lseek(fd, page_tag - extent_tag, SEEK_SET);
+        write(fd, bytes, PAGE_SIZE);
+        close(fd);
     }
-    else //if (size < PAGE_SIZE)
-    {
-        pthread_rwlock_wrlock(&page_lock);
-        auto count = page_map->count(page_tag);
-        assert((0 <= count) && (count < 2));
+#endif
 
-        if (count == 0)
-        {
-            auto extent_tag = page_tag & (~EXTENT_MASK);
-            auto extent_offset = page_tag & EXTENT_MASK;
+    pthread_rwlock_wrlock(&page_lock);
+    memcpy(page_map->operator[](page_tag).bytes, bytes, PAGE_SIZE);
+    page_map->operator[](page_tag).dirty = true;
+    pthread_rwlock_unlock(&page_lock);
 
-            pthread_rwlock_wrlock(&extent_lock);
-            if (extent_read(extent_tag) != true)
-            {
-                pthread_rwlock_unlock(&extent_lock);
-                pthread_rwlock_unlock(&page_lock);
-                return false;
-            }
-
-            auto extent_itr = extent_map->find(extent_tag);
-            if (extent_itr == extent_map->end())
-            {
-                pthread_rwlock_unlock(&extent_lock);
-                pthread_rwlock_unlock(&page_lock);
-                return false;
-            }
-            else
-            {
-                pthread_rwlock_rdlock(&(extent_itr->second.lock));
-                auto &pg = page_map->operator[](page_tag) = std::move(disk_page());
-                memcpy(pg.bytes, extent_itr->second.bytes + extent_offset, PAGE_SIZE);
-                memcpy(pg.bytes, bytes, size);
-                pthread_rwlock_unlock(&(extent_itr->second.lock));
-                pthread_rwlock_unlock(&extent_lock);
-                pthread_rwlock_unlock(&page_lock);
-                return true;
-            }
-        }
-        else //if (count == 1)
-        {
-            auto page_itr = page_map->find(page_tag);
-            if (page_itr == page_map->end())
-            {
-                pthread_rwlock_unlock(&page_lock);
-                return false;
-            }
-            else
-            {
-                memcpy(page_itr->second.bytes, bytes, size);
-                pthread_rwlock_unlock(&page_lock);
-                return true;
-            }
-        }
-    }
+    return true;
 }
 
 /**
- * Read bytes from storage.  Aligned reads are preferred.
+ * Read bytes from storage.
  *
  * @param offset The virtual block device offset to read from
  * @param size The number of bytes to read
@@ -401,55 +325,24 @@ bool aligned_page_write(uint64_t page_tag, uint16_t size, const uint8_t *bytes)
 extern "C" int storage_read(off_t offset, size_t size, uint8_t *bytes)
 {
     uint64_t page_tag = offset & (~PAGE_MASK);
+    uint16_t size16 = static_cast<uint16_t>(std::min(size, (page_tag + PAGE_SIZE) - offset));
 
-    if (static_cast<uint64_t>(offset) == page_tag) // if aligned
+    if (page_tag == static_cast<uint64_t>(offset)) // aligned
     {
-        int bytes_read = 0;
-        while (size > 0)
-        {
-            uint16_t size16 = size <= PAGE_SIZE ? static_cast<uint16_t>(size) : static_cast<uint16_t>(PAGE_SIZE);
-            if (aligned_page_read(page_tag, size16, bytes) == true)
-            {
-                offset += size16;
-                size -= size16;
-                bytes += size16;
-                bytes_read += size16;
-            }
-            else if (bytes_read == 0)
-            {
-                return -EIO;
-            }
-            else
-            {
-                return bytes_read;
-            }
-        }
-        return bytes_read;
+        aligned_page_read(page_tag, size16, bytes);
+        return size16;
     }
-    else // if not aligned
+    else // unaligned
     {
-        uint8_t page[PAGE_SIZE];
-        auto diff = offset - page_tag;
-        assert(diff < PAGE_SIZE);
-        auto left_in_page = PAGE_SIZE - diff;
-        uint16_t wanted = static_cast<uint16_t>(std::min(left_in_page, size));
-
-        if (aligned_page_read(page_tag, PAGE_SIZE, page) != true)
-        {
-            // If unable to read, report IO error
-            return -EIO;
-        }
-        else
-        {
-            // Otherwise report number of bytes read
-            memcpy(bytes, page + diff, wanted);
-            return static_cast<int>(wanted);
-        }
+        uint8_t page[PAGE_SIZE] = {};
+        aligned_page_read(page_tag, PAGE_SIZE, page);
+        memcpy(bytes, page + (offset - page_tag), size16);
+        return size16;
     }
 }
 
 /**
- * Write bytes to storage.  Aligned writes are prefferred.
+ * Write bytes to storage.
  *
  * @param offset The virtual block device offset to write to
  * @param size The number of bytes to write
@@ -459,50 +352,24 @@ extern "C" int storage_read(off_t offset, size_t size, uint8_t *bytes)
 extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
 {
     uint64_t page_tag = offset & (~PAGE_MASK);
+    uint16_t size16 = static_cast<uint16_t>(std::min(size, (page_tag + PAGE_SIZE) - offset));
 
-    if (static_cast<uint64_t>(offset) == page_tag) // if aligned
+    if (page_tag == static_cast<uint64_t>(offset) && size == PAGE_SIZE) // complete page
     {
-        int bytes_written = 0;
-        while (size > 0)
-        {
-            uint16_t size16 = size <= PAGE_SIZE ? static_cast<uint16_t>(size) : static_cast<uint16_t>(PAGE_SIZE);
-            if (aligned_page_write(page_tag, size16, bytes) == true)
-            {
-                offset += size16;
-                size -= size16;
-                bytes += size16;
-                bytes_written += size16;
-            }
-            else if (bytes_written == 0)
-            {
-                return -EIO;
-            }
-            else
-            {
-                return bytes_written;
-            }
-        }
-        return bytes_written;
+        aligned_page_write(page_tag, bytes);
+        return size16;
     }
-    else // if not aligned
+    else // unaligned or incomplete page
     {
         uint8_t page[PAGE_SIZE] = {};
-        auto diff = offset - page_tag;
-        assert(diff < PAGE_SIZE);
-        auto left_in_page = PAGE_SIZE - diff;
-        uint16_t wanted = static_cast<uint16_t>(std::min(left_in_page, size));
-
-        aligned_page_read(page_tag, PAGE_SIZE, page); // XXX in a race
-        memcpy(page + diff, bytes, wanted);
-        if (aligned_page_write(page_tag, PAGE_SIZE, page) != true)
-        {
-            // If not able to write, report IO error
-            return -EIO;
-        }
-        else
-        {
-            // Otherwise, report number of byte written
-            return static_cast<int>(wanted);
-        }
+        aligned_page_read(page_tag, PAGE_SIZE, page);      // read
+        memcpy(page + (offset - page_tag), bytes, size16); // update
+        aligned_page_write(page_tag, page);                // write
+        return size16;
     }
+}
+
+const disk_page &debug_page_map(uint64_t page_tag)
+{
+    return page_map->operator[](page_tag);
 }
