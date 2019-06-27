@@ -23,30 +23,35 @@
  */
 
 #include <stdint.h>
-#include <stdbool.h>
-#include "block_range_entry.h"
 
-#ifndef __RANGE_H__
-#define __RANGE_H__
+#ifndef __STORAGE_H__
+#define __STORAGE_H__
 
 #ifdef __cplusplus
+constexpr uint64_t PAGE_SIZE = 0x1000;
+constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
+constexpr uint64_t PAGES_PER_EXTENT = (1 << 10);
+constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
+constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
+
+#define EXTENT_TEMPLATE "%s/%016lX.extent"
+#define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
+
 extern "C"
 {
 #endif
 
-    int rtree_init();
-    int rtree_deinit();
-    int rtree_insert(uint64_t start, uint64_t end, long sn,
-                     bool memory, const uint8_t *bytes);
-    int rtree_remove(uint64_t start, uint64_t end, long sn);
-    uint64_t rtree_size(bool memory);
-    int rtree_query(uint64_t start, uint64_t end, uint8_t *buf,
-                    struct block_range_entry_part **parts);
-    uint64_t rtree_storage_dump(struct block_range_entry **entries);
-    uint64_t rtree_memory_dump(struct block_range_entry **entries,
-                               uint8_t **bytes);
+    void storage_init(const char *_blockdir);
+    void storage_deinit();
+    int storage_flush();
+    int storage_read(off_t offset, size_t size, uint8_t *bytes);
+    int storage_write(off_t offset, size_t size, const uint8_t *bytes);
 
 #ifdef __cplusplus
 }
+
+bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes);
+bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
+
 #endif
 #endif

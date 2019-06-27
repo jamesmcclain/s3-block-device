@@ -30,6 +30,16 @@
 #ifndef __BLOCK_RANGE_ENTRY_H__
 #define __BLOCK_RANGE_ENTRY_H__
 
+/*
+ * A Boost R-Tree and ICL-compatible object for representing ranges of
+ * bytes (referred to as "blocks"; unlike disk blocks, these blocks
+ * are unaligned [although in practice they probably will be one is
+ * using a typical filesystem on top of the file supplied by this
+ * filesystem]).
+ *
+ * The operator+= implements the natural notion of set union
+ * w.r.t. combining intervals: it defers to the later range.
+ */
 struct block_range_entry
 {
     uint64_t start;
@@ -47,6 +57,11 @@ struct block_range_entry
 #endif
 };
 
+/*
+ * An object for representing part of a block_range_entry (that is,
+ * part of a range of bytes).  The block range entry is given, then
+ * the start and end of the subrange as a closed interval.
+ */
 struct block_range_entry_part
 {
     struct block_range_entry entry;
