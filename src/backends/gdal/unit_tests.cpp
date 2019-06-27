@@ -62,18 +62,17 @@ BOOST_AUTO_TEST_CASE(aligned_page_read_backed)
     storage_init("/vsimem");
     freshen_file();
 
+    memset(page, 0, PAGE_SIZE);
     aligned_page_read(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
     BOOST_TEST(page[0] == 0xaa);
     BOOST_TEST(page[PAGE_SIZE - 1] == 0xaa);
 
     memset(page, 0, PAGE_SIZE);
-
     aligned_page_read(page_tag + (1 * PAGE_SIZE), PAGE_SIZE, page);
     BOOST_TEST(page[0] == 0xaa);
     BOOST_TEST(page[PAGE_SIZE - 1] == 0xaa);
 
     memset(page, 0, PAGE_SIZE);
-
     aligned_page_read(page_tag + (2 * PAGE_SIZE), PAGE_SIZE / 2, page);
     BOOST_TEST(page[0] == 0xaa);
     BOOST_TEST(page[PAGE_SIZE - 1] == 0x00);
@@ -90,8 +89,8 @@ BOOST_AUTO_TEST_CASE(aligned_page_read_unbacked)
     freshen_file();
 
     aligned_page_read(page_tag, PAGE_SIZE, page);
-    BOOST_TEST(page[0] == 0x00);
-    BOOST_TEST(page[PAGE_SIZE - 1] == 0x00);
+    BOOST_TEST(page[0] == 0x33);
+    BOOST_TEST(page[PAGE_SIZE - 1] == 0x33);
 
     storage_deinit();
 }
@@ -105,7 +104,7 @@ BOOST_AUTO_TEST_CASE(aligned_page_write_backed)
     freshen_file();
 
     memset(page, 0x01, PAGE_SIZE);
-    aligned_page_write(page_tag + (0 * PAGE_SIZE), page);
+    aligned_whole_page_write(page_tag + (0 * PAGE_SIZE), page);
     aligned_page_read(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
     BOOST_TEST(page[0] == 0x01);
     BOOST_TEST(page[PAGE_SIZE - 1] == 0x01);
@@ -113,7 +112,7 @@ BOOST_AUTO_TEST_CASE(aligned_page_write_backed)
     storage_deinit();
 }
 
-BOOST_AUTO_TEST_CASE(aligned_page_write_new)
+BOOST_AUTO_TEST_CASE(aligned_page_write_unbacked)
 {
     uint8_t page[PAGE_SIZE] = {};
     uint64_t page_tag = 72 * EXTENT_SIZE;
@@ -122,7 +121,7 @@ BOOST_AUTO_TEST_CASE(aligned_page_write_new)
     freshen_file();
 
     memset(page, 0x01, PAGE_SIZE);
-    aligned_page_write(page_tag + (0 * PAGE_SIZE), page);
+    aligned_whole_page_write(page_tag + (0 * PAGE_SIZE), page);
     aligned_page_read(page_tag + (0 * PAGE_SIZE), PAGE_SIZE, page);
     BOOST_TEST(page[0] == 0x01);
     BOOST_TEST(page[PAGE_SIZE - 1] == 0x01);
@@ -134,18 +133,19 @@ BOOST_AUTO_TEST_CASE(storage_read_unaligned_1)
 {
     off_t offset = backed_extent_tag - 33;
     size_t size = 2 * PAGE_SIZE + 3;
-    uint8_t bytes[size] = {};
+    uint8_t *bytes = new uint8_t[size + 1];
     int bytes_read = 0;
 
     storage_init("/vsimem");
     freshen_file();
 
-    memset(bytes, 0x55, size);
+    memset(bytes, 0x55, size + 1);
     bytes_read = storage_read(offset, size, bytes);
-    BOOST_TEST(bytes_read == 33);
-    BOOST_TEST(bytes[0] == 0);
+    BOOST_TEST(bytes_read == size);
+    BOOST_TEST(bytes[0] == 0x33);
     BOOST_TEST(bytes[bytes_read] == 0x55);
 
+    delete bytes;
     storage_deinit();
 }
 
@@ -153,124 +153,116 @@ BOOST_AUTO_TEST_CASE(storage_read_unaligned_2)
 {
     off_t offset = backed_extent_tag + 33;
     size_t size = 2 * PAGE_SIZE + 3;
-    uint8_t bytes[size] = {};
+    uint8_t *bytes = new uint8_t[size + 1];
     int bytes_read = 0;
 
     storage_init("/vsimem");
     freshen_file();
 
-    memset(bytes, 0x55, size);
+    memset(bytes, 0x55, size + 1);
     bytes_read = storage_read(offset, size, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE - 33);
+    BOOST_TEST(bytes_read == size);
     BOOST_TEST(bytes[0] == 0xaa);
     BOOST_TEST(bytes[bytes_read] == 0x55);
 
+    delete bytes;
     storage_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(storage_read_aligned)
 {
-    off_t offset = backed_extent_tag + (5 * PAGE_SIZE);
+    off_t offset = backed_extent_tag;
     size_t size = 2 * PAGE_SIZE + 3;
-    uint8_t bytes[size] = {};
+    uint8_t *bytes = new uint8_t[size + 1];
     int bytes_read = 0;
 
     storage_init("/vsimem");
     freshen_file();
 
-    memset(bytes, 0x55, size);
+    memset(bytes, 0x55, size + 1);
     bytes_read = storage_read(offset, size, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE); // XXX one page maximum
+    BOOST_TEST(bytes_read == size);
     BOOST_TEST(bytes[0] == 0xaa);
     BOOST_TEST(bytes[bytes_read - 1] == 0xaa);
-    BOOST_TEST(bytes[size - 1] == 0x55); // XXX one page maximum
+    BOOST_TEST(bytes[bytes_read] == 0x55);
 
+    delete bytes;
     storage_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(storage_write_unaligned_1)
 {
+    off_t offset = backed_extent_tag - 33;
     size_t size = 2 * PAGE_SIZE + 3;
-    uint8_t bytes[size] = {};
+    uint8_t *bytes = new uint8_t[size + 1];
     int bytes_read = 0;
     int bytes_written = 0;
 
     storage_init("/vsimem");
     freshen_file();
 
-    memset(bytes, 0x55, size);
-    bytes_written = storage_write(backed_extent_tag - 33, size, bytes);
-    BOOST_TEST(bytes_written == 33);
+    memset(bytes, 0x55, size + 1);
+    bytes_written = storage_write(offset, size, bytes);
+    BOOST_TEST(bytes_written == size);
 
-    // Bytes written to this page
-    memset(bytes, 0, size);
-    bytes_read = storage_read(backed_extent_tag - PAGE_SIZE, PAGE_SIZE, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE);
-    BOOST_TEST(bytes[0] == 0x00);
+    memset(bytes, 0, size + 1);
+    bytes_read = storage_read(offset, size, bytes);
+    BOOST_TEST(bytes_read == size);
+    BOOST_TEST(bytes[0] == 0x55);
     BOOST_TEST(bytes[bytes_read - 1] == 0x55);
+    BOOST_TEST(bytes[bytes_read] == 0x00);
 
-    // This page should be unchanged
-    memset(bytes, 0, size);
-    bytes_read = storage_read(backed_extent_tag, PAGE_SIZE, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE);
-    BOOST_TEST(bytes[0] == 0xaa);
-    BOOST_TEST(bytes[bytes_read - 1] == 0xaa);
-
+    delete bytes;
     storage_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(storage_write_unaligned_2)
 {
     size_t size = 2 * PAGE_SIZE + 3;
-    uint8_t bytes[size] = {};
+    uint8_t *bytes = new uint8_t[size + 1];
     int bytes_read = 0;
     int bytes_written = 0;
 
     storage_init("/vsimem");
     freshen_file();
 
-    memset(bytes, 0x55, size);
-    bytes_written = storage_write(backed_extent_tag + (2 * PAGE_SIZE) + 33, size, bytes);
-    BOOST_TEST(bytes_written == PAGE_SIZE - 33);
+    memset(bytes, 0x55, size + 1);
+    bytes_written = storage_write(backed_extent_tag + 33, size, bytes);
+    BOOST_TEST(bytes_written == size);
 
-    // This page should be unchanged
-    memset(bytes, 0, size);
-    bytes_read = storage_read(backed_extent_tag + (1 * PAGE_SIZE), PAGE_SIZE, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE);
-    BOOST_TEST(bytes[0] == 0xaa);
-    BOOST_TEST(bytes[bytes_read - 1] == 0xaa);
-
-    // Bytes written to this page
-    memset(bytes, 0, size);
-    bytes_read = storage_read(backed_extent_tag + (2 * PAGE_SIZE), PAGE_SIZE, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE);
-    BOOST_TEST(bytes[0] == 0xaa);
+    memset(bytes, 0, size + 1);
+    bytes_read = storage_read(backed_extent_tag + 33, size, bytes);
+    BOOST_TEST(bytes_read == size);
+    BOOST_TEST(bytes[0] == 0x55);
     BOOST_TEST(bytes[bytes_read - 1] == 0x55);
+    BOOST_TEST(bytes[bytes_read] == 0x00);
 
+    delete bytes;
     storage_deinit();
 }
 
 BOOST_AUTO_TEST_CASE(storage_write_aligned)
 {
-    off_t offset = backed_extent_tag + (3 * PAGE_SIZE);
+    off_t offset = backed_extent_tag;
     size_t size = 2 * PAGE_SIZE + 3;
-    uint8_t bytes[size] = {};
+    uint8_t *bytes = new uint8_t[size + 1];
     int bytes_read = 0;
     int bytes_written = 0;
 
     storage_init("/vsimem");
     freshen_file();
 
-    memset(bytes, 0x55, size);
+    memset(bytes, 0x55, size + 1);
     bytes_written = storage_write(offset, size, bytes);
-    BOOST_TEST(bytes_written == PAGE_SIZE); // XXX one page maximum
+    BOOST_TEST(bytes_written == size);
 
-    memset(bytes, 0, size);
+    memset(bytes, 0, size + 1);
     bytes_read = storage_read(offset, size, bytes);
-    BOOST_TEST(bytes_read == PAGE_SIZE); // XXX one page maximum
+    BOOST_TEST(bytes_read == size);
     BOOST_TEST(bytes[0] == 0x55);
     BOOST_TEST(bytes[bytes_read - 1] == 0x55);
-    BOOST_TEST(bytes[size - 1] == 0x00); // XXX one page maximum
+    BOOST_TEST(bytes[bytes_read] == 0x00);
 
+    delete bytes;
     storage_deinit();
 }
