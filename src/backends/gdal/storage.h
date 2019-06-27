@@ -35,7 +35,7 @@ constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
 constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
 
 #define EXTENT_TEMPLATE "%s/%016lX.extent"
-#define SCRATCH_FILE "/tmp/s3bd.scratch"
+#define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
 
 extern "C"
 {
@@ -43,7 +43,7 @@ extern "C"
 
     void storage_init(const char *_blockdir);
     void storage_deinit();
-    void storage_flush();
+    int storage_flush();
     int storage_read(off_t offset, size_t size, uint8_t *bytes);
     int storage_write(off_t offset, size_t size, const uint8_t *bytes);
 

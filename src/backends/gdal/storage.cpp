@@ -24,6 +24,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
@@ -43,25 +44,47 @@
 
 #include "storage.h"
 
-typedef std::set<uint64_t> tag_set_t;
-tag_set_t *tag_set = nullptr;
-
 static const char *blockdir = nullptr;
 
-static pthread_rwlock_t scratch_lock = PTHREAD_RWLOCK_INITIALIZER;
-int scratch_fd = -1;
+typedef std::set<uint64_t> tag_set_t;
+static tag_set_t *tag_set = nullptr;
+static pthread_rwlock_t tag_set_lock;
+
+static int scratch_write_fd = -1;
+static pthread_mutex_t scratch_write_lock;
+
+static constexpr int SCRATCH_FD_COUNT = 8;
+static int scratch_read_fd[SCRATCH_FD_COUNT];
+static pthread_mutex_t scratch_read_mutex[SCRATCH_FD_COUNT];
 
 /**
  * Initialize storage.
  *
  * @param _blockdir A pointer to a string giving the path to the storage directory
  */
-extern "C" void storage_init(const char *_blockdir)
+void storage_init(const char *_blockdir)
 {
+    char scratch_filename[0x100];
+
     assert(_blockdir != nullptr);
     blockdir = _blockdir;
 
-    scratch_fd = open(SCRATCH_FILE, O_RDWR | O_CREAT, S_IRWXU);
+    tag_set_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+    scratch_write_lock = PTHREAD_MUTEX_INITIALIZER;
+    sprintf(scratch_filename, SCRATCH_TEMPLATE, getpid());
+    scratch_write_fd = open(scratch_filename, O_RDWR | O_CREAT, S_IRWXU);
+
+    for (int i = 0; i < SCRATCH_FD_COUNT; ++i)
+    {
+        scratch_read_fd[i] = open(scratch_filename, O_RDONLY);
+        scratch_read_mutex[i] = PTHREAD_MUTEX_INITIALIZER;
+    }
+
+    if (getenv("S3BD_KEEP_SCRATCH_FILE") == nullptr)
+    {
+        unlink(scratch_filename);
+    }
 
     if (tag_set == nullptr)
     {
@@ -77,47 +100,36 @@ extern "C" void storage_init(const char *_blockdir)
 /**
  * Deinitialize storage.
  */
-extern "C" void storage_deinit()
+void storage_deinit()
 {
     if (tag_set != nullptr)
     {
         delete tag_set;
         tag_set = nullptr;
     }
-    close(scratch_fd);
-#if 0
-    unlink(SCRATCH_FILE);
-#endif
+    close(scratch_write_fd);
 }
 
-#if 0
 /**
  * Flush a page and all of its extent-mates to storage.  Only one
  * instance of this function should ever be active at once.
+ *
+ * @param page_tag The tag whose entire extent should be flushed
+ * @return Boolean indicating success or failure
  */
 bool flush_page_and_friends(uint64_t page_tag)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
 
     uint8_t *extent = new uint8_t[EXTENT_SIZE];
-
     uint64_t extent_tag = (page_tag & (~EXTENT_MASK));
 
-    // Bring all pages in
+    // Bring all pages into the array `extent`
     for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
     {
         uint64_t inner_offset = i * PAGE_SIZE;
         aligned_page_read(extent_tag + inner_offset, PAGE_SIZE, extent + inner_offset);
     }
-
-#if 0
-    if (extent_tag == 0x400000)
-    {
-        int fd = open("/tmp/extent.mp3", O_RDWR);
-        write(fd, extent, EXTENT_SIZE);
-        close(fd);
-    }
-#endif
 
     // Open extent file
     char filename[0x100];
@@ -129,45 +141,71 @@ bool flush_page_and_friends(uint64_t page_tag)
         return false;
     }
 
-    // Copy all pages out and remove them from page_map
-    pthread_rwlock_wrlock(&page_lock);
+    // Copy all pages from the array `extent`, delete them from the scratch file
+    pthread_rwlock_wrlock(&tag_set_lock);
+    pthread_mutex_lock(&scratch_write_lock);
     for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
     {
-        uint64_t inner_offset = i * PAGE_SIZE;
-        uint64_t inner_page_tag = extent_tag + inner_offset;
-        while (VSIFWriteL(extent + inner_offset, PAGE_SIZE, 1, handle) != 1) // XXX
+        uint64_t offset = i * PAGE_SIZE;
+        uint64_t inner_page_tag = extent_tag + offset;
+
+        // Write into extent file
+        if (VSIFWriteL(extent + offset, PAGE_SIZE, 1, handle) != 1)
         {
+            pthread_mutex_unlock(&scratch_write_lock);
+            pthread_rwlock_unlock(&tag_set_lock);
+            VSIFFlushL(handle);
+            VSIFCloseL(handle);
+            delete extent;
+            return false;
         }
-        page_map->erase(inner_page_tag);
+
+        // Remove entry from scratch file
+        fallocate(scratch_write_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, inner_page_tag, PAGE_SIZE);
+
+        // Remove entry from tag set
+        tag_set->erase(inner_page_tag);
     }
+    pthread_mutex_unlock(&scratch_write_lock);
+    pthread_rwlock_unlock(&tag_set_lock);
+
     VSIFFlushL(handle);
     VSIFCloseL(handle);
-    pthread_rwlock_unlock(&page_lock);
 
     delete extent;
+
     return true;
 }
 
-void storage_flush()
+/**
+ * Flush all pages to storage.
+ * 
+ * @return 0 on success, -1 on failure
+ */
+int storage_flush()
 {
     while (true)
     {
-        pthread_rwlock_rdlock(&page_lock);
-        auto itr = page_map->begin();
-        if (itr == page_map->end())
+        pthread_rwlock_rdlock(&tag_set_lock);
+        auto itr = tag_set->begin();
+        if (itr == tag_set->end())
         {
-            pthread_rwlock_unlock(&page_lock);
-            return;
+            pthread_rwlock_unlock(&tag_set_lock);
+            return 0;
         }
         else
         {
-            uint64_t page_tag = itr->first;
-            pthread_rwlock_unlock(&page_lock);
+            uint64_t page_tag = *itr;
+            pthread_rwlock_unlock(&tag_set_lock);
             flush_page_and_friends(page_tag);
         }
     }
+    return 0;
 }
-#endif
+
+#define GET_FD(index) for (index = 0; pthread_mutex_trylock(&scratch_read_mutex[index % SCRATCH_FD_COUNT]); ++index)
+#define USE_FD(index) (scratch_read_fd[index % SCRATCH_FD_COUNT])
+#define RELEASE_FD(index) pthread_mutex_unlock(&scratch_read_mutex[index % SCRATCH_FD_COUNT])
 
 /**
  * Attempt to read and return a page or less of data.
@@ -181,25 +219,100 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
 
-    pthread_rwlock_rdlock(&scratch_lock);
+    pthread_rwlock_rdlock(&tag_set_lock);
     if (tag_set->count(page_tag) > 0) // If page should exist ...
     {
-        if (lseek(scratch_fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // ... and page exists
+        int index = 0;
+
+        pthread_rwlock_unlock(&tag_set_lock);
+        GET_FD(index);
+        if (lseek(USE_FD(index), page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // ... and page exists
         {
-            assert(read(scratch_fd, bytes, size) == size); // XXX ensure full read
-            pthread_rwlock_unlock(&scratch_lock);
+            assert(read(USE_FD(index), bytes, size) == size); // XXX ensure full read
+            RELEASE_FD(index);
             return true;
         }
         else // ... otherwise if it should exist but does not
         {
-            pthread_rwlock_unlock(&scratch_lock);
+            RELEASE_FD(index);
             return false;
         }
     }
-    else // If the page should not exist
+    else // If the page should not exist yet ...
     {
-        pthread_rwlock_unlock(&scratch_lock);
-        memset(bytes, 0, size);
+        uint64_t extent_tag = page_tag & (~EXTENT_MASK);
+        char filename[0x100];
+        VSILFILE *handle = NULL;
+
+        pthread_rwlock_unlock(&tag_set_lock); // drop read lock
+
+        // Attempt to open the far-away extent file ...
+        sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
+        if ((handle = VSIFOpenL(filename, "r")) == NULL) // ... if it doesn't exist, return
+        {
+            memset(bytes, 0x33, size);
+            return true;
+        }
+
+        pthread_rwlock_wrlock(&tag_set_lock); // acquire write lock
+
+        // Loop through the extent file and attempt to read all not-already-present pages ...
+        uint8_t *scratch_page = new uint8_t[PAGE_SIZE];
+        for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
+        {
+            uint64_t offset = (i * PAGE_SIZE);
+            uint64_t inner_page_tag = extent_tag + offset;
+
+            if (tag_set->count(inner_page_tag) == 0)
+            {
+                // Attempt to seek to the offset of the page in the extent file ...
+                if (VSIFSeekL(handle, offset, SEEK_SET) != 0)
+                {
+                    pthread_rwlock_unlock(&tag_set_lock);
+                    return false;
+                }
+                // Attempt to read the page from the extent file ...
+                if (VSIFReadL(scratch_page, PAGE_SIZE, 1, handle) != 1)
+                {
+                    pthread_rwlock_unlock(&tag_set_lock);
+                    delete scratch_page;
+                    return false;
+                }
+                // Attempt to seek to the page in the local scratch file ...
+                pthread_mutex_lock(&scratch_write_lock);
+                if (lseek(scratch_write_fd, inner_page_tag, SEEK_SET) != static_cast<off_t>(inner_page_tag))
+                {
+                    pthread_mutex_unlock(&scratch_write_lock);
+                    pthread_rwlock_unlock(&tag_set_lock);
+                    delete scratch_page;
+                    return false;
+                }
+                // Write the page to the local scratch file
+                assert(write(scratch_write_fd, scratch_page, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
+                pthread_mutex_unlock(&scratch_write_lock);
+                tag_set->insert(inner_page_tag);
+            }
+        }
+
+        int index = 0;
+
+        GET_FD(index);
+        if (lseek(USE_FD(index), page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // Now seek to the data ...
+        {
+            assert(read(USE_FD(index), bytes, size) == size); // XXX ensure full read
+            RELEASE_FD(index);
+            pthread_rwlock_unlock(&tag_set_lock);
+            return true;
+        }
+        else
+        {
+            RELEASE_FD(index);
+            pthread_rwlock_unlock(&tag_set_lock);
+            return false;
+        }
+
+        delete scratch_page;
+
         return true;
     }
 }
@@ -216,33 +329,37 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
 
-    pthread_rwlock_wrlock(&scratch_lock);
-    if (tag_set->count(page_tag) > 0) // If page should exist ...
+    pthread_rwlock_wrlock(&tag_set_lock); // XXX would like to upgrade
+    pthread_mutex_lock(&scratch_write_lock);
+    if (tag_set->count(page_tag) > 0) // If page is already in the tag set ...
     {
-        if (lseek(scratch_fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag)) // ... and page exists
+        pthread_rwlock_unlock(&tag_set_lock);
+        if (lseek(scratch_write_fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag)) // ... and page position is seekable
         {
-            assert(write(scratch_fd, bytes, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
-            pthread_rwlock_unlock(&scratch_lock);
+            assert(write(scratch_write_fd, bytes, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
+            pthread_mutex_unlock(&scratch_write_lock);
             return true;
         }
         else // ... otherwise if it should exist but does not
         {
-            pthread_rwlock_unlock(&scratch_lock);
+            pthread_mutex_unlock(&scratch_write_lock);
             return false;
         }
     }
-    else // If the page should not exist, yet ...
+    else // If the page is not already in the tag set ...
     {
         tag_set->insert(page_tag);
-        if (lseek(scratch_fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag)) // ... and the seek succeeds
+        if (lseek(scratch_write_fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag)) // ... and the seek succeeds
         {
-            write(scratch_fd, bytes, PAGE_SIZE);
-            pthread_rwlock_unlock(&scratch_lock);
+            assert(write(scratch_write_fd, bytes, PAGE_SIZE) == PAGE_SIZE); //XXX should ensure complete write
+            pthread_mutex_unlock(&scratch_write_lock);
+            pthread_rwlock_unlock(&tag_set_lock);
             return true;
         }
         else // ... otherwise  if the seek fails
         {
-            pthread_rwlock_unlock(&scratch_lock);
+            pthread_mutex_unlock(&scratch_write_lock);
+            pthread_rwlock_unlock(&tag_set_lock);
             return false;
         }
     }
