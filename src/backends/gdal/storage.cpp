@@ -117,9 +117,6 @@ void storage_deinit()
  */
 bool flush_extent(uint64_t extent_tag)
 {
-    // XXX consider per-extent cooldown timer (motivated by mkfs)
-    // XXX this leaks read-only pages
-
     uint8_t *extent = new uint8_t[EXTENT_SIZE];
 
     assert(extent_tag == (extent_tag & (~EXTENT_MASK))); // Assert alignment
@@ -261,24 +258,20 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 
             if (lseek(USE_FD(index), inner_page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If the page already exists ...
             {
-#if 1
                 if (inner_page_tag == page_tag)
                 {
                     assert(read(USE_FD(index), bytes, size) == size); // XXX ensure full read
                 }
-#endif
                 continue;
             }
             else // If the page does not exist ...
             {
                 if (handle == NULL) // .. and the extent file was not openable ...
                 {
-#if 1
                     if (inner_page_tag == page_tag)
                     {
                         memset(bytes, 0x33, size);
                     }
-#endif
                     memset(scratch_page, 0x33, PAGE_SIZE);
                 }
                 else // ... and the extent was openable ...
@@ -308,20 +301,12 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
                     assert(write(scratch_write_fd, scratch_page, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
                     pthread_mutex_unlock(&scratch_write_lock);
 
-#if 1
                     if (inner_page_tag == page_tag)
                     {
                         memcpy(bytes, scratch_page, size);
                     }
-#endif
                 }
             }
-#if 0
-            if (inner_page_tag == page_tag)
-            {
-                memcpy(bytes, scratch_page, size);
-            }
-#endif
         }
 
         RELEASE_FD(index);
