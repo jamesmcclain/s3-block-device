@@ -215,7 +215,8 @@ int storage_flush()
     return 0;
 }
 
-#define GET_FD(index) for (index = 0; pthread_mutex_trylock(&scratch_read_mutex[index % SCRATCH_FD_COUNT]); ++index)
+#define GET_FD(index) \
+    for (index = 0; pthread_mutex_trylock(&scratch_read_mutex[index % SCRATCH_FD_COUNT]); ++index)
 #define USE_FD(index) (scratch_read_fd[index % SCRATCH_FD_COUNT])
 #define RELEASE_FD(index) pthread_mutex_unlock(&scratch_read_mutex[index % SCRATCH_FD_COUNT])
 
@@ -260,16 +261,24 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 
             if (lseek(USE_FD(index), inner_page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If the page already exists ...
             {
+#if 1
                 if (inner_page_tag == page_tag)
                 {
-                    assert(read(USE_FD(index), scratch_page, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full read
+                    assert(read(USE_FD(index), bytes, size) == size); // XXX ensure full read
                 }
+#endif
                 continue;
             }
             else // If the page does not exist ...
             {
                 if (handle == NULL) // .. and the extent file was not openable ...
                 {
+#if 1
+                    if (inner_page_tag == page_tag)
+                    {
+                        memset(bytes, 0x33, size);
+                    }
+#endif
                     memset(scratch_page, 0x33, PAGE_SIZE);
                 }
                 else // ... and the extent was openable ...
@@ -298,12 +307,21 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
                     // write the page to the local scratch file
                     assert(write(scratch_write_fd, scratch_page, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
                     pthread_mutex_unlock(&scratch_write_lock);
+
+#if 1
+                    if (inner_page_tag == page_tag)
+                    {
+                        memcpy(bytes, scratch_page, size);
+                    }
+#endif
                 }
             }
+#if 0
             if (inner_page_tag == page_tag)
             {
                 memcpy(bytes, scratch_page, size);
             }
+#endif
         }
 
         RELEASE_FD(index);
@@ -348,7 +366,6 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
         pthread_mutex_unlock(&scratch_write_lock);
         return false;
     }
-    
 }
 
 /**
