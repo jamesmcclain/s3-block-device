@@ -257,7 +257,7 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
             uint64_t offset = (i * PAGE_SIZE);
             uint64_t inner_page_tag = extent_tag + offset;
 
-            if (lseek(USE_FD(index), inner_page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If the page already exists ...
+            if (lseek(USE_FD(index), inner_page_tag, SEEK_DATA) == static_cast<off_t>(inner_page_tag)) // If the page already exists ...
             {
                 if (inner_page_tag == page_tag)
                 {
