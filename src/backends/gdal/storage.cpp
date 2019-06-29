@@ -173,9 +173,6 @@ bool flush_extent(uint64_t extent_tag)
         }
     }
 
-    // Remove entry from scratch file
-    fallocate(scratch_write_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, extent_tag, EXTENT_SIZE);
-
     // Remove entry dirty set
     dirty_extent_set->erase(extent_tag);
 
