@@ -43,6 +43,7 @@
 #include <pthread.h>
 
 #include "storage.h"
+#include "fullio.h"
 
 static const char *blockdir = nullptr;
 
@@ -235,7 +236,7 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 
     if (lseek(USE_FD(index), page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If page exists ...
     {
-        assert(read(USE_FD(index), bytes, size) == size); // XXX ensure full read
+        fullread(USE_FD(index), bytes, size);
         RELEASE_FD(index);
         return true;
     }
@@ -260,7 +261,7 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
             {
                 if (inner_page_tag == page_tag)
                 {
-                    assert(read(USE_FD(index), bytes, size) == size); // XXX ensure full read
+                    fullread(USE_FD(index), bytes, size);
                 }
                 continue;
             }
@@ -272,7 +273,6 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
                     {
                         memset(bytes, 0x33, size);
                     }
-                    memset(scratch_page, 0x33, PAGE_SIZE);
                 }
                 else // ... and the extent was openable ...
                 {
@@ -298,7 +298,7 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
                         return false;
                     }
                     // write the page to the local scratch file
-                    assert(write(scratch_write_fd, scratch_page, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
+                    fullwrite(scratch_write_fd, scratch_page, PAGE_SIZE);
                     pthread_mutex_unlock(&scratch_write_lock);
 
                     if (inner_page_tag == page_tag)
@@ -334,7 +334,7 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
     pthread_mutex_lock(&scratch_write_lock);
     if (lseek(scratch_write_fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag))
     {
-        assert(write(scratch_write_fd, bytes, PAGE_SIZE) == PAGE_SIZE); // XXX ensure full write
+        fullwrite(scratch_write_fd, bytes, PAGE_SIZE);
         pthread_mutex_unlock(&scratch_write_lock);
 
         pthread_rwlock_wrlock(&dirty_extent_lock);
