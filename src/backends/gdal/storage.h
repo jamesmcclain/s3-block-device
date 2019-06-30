@@ -33,10 +33,13 @@ constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
 constexpr uint64_t PAGES_PER_EXTENT = (1 << 10);
 constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
 constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
+constexpr uint64_t LOCAL_CACHE_MEGABYTES = 4096;
 constexpr int APPROX_MAX_BACKGROUND_THREADS = 16;
 
 #define EXTENT_TEMPLATE "%s/%016lX.extent"
 #define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
+#define S3BD_KEEP_SCRATCH_FILE "S3BD_KEEP_SCRATCH_FILE"
+#define S3BD_LOCAL_CACHE_MEGABYTES "S3BD_LOCAL_CACHE_MEGABYTES"
 
 extern "C"
 {

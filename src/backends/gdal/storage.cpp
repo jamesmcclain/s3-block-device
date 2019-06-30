@@ -92,14 +92,28 @@ void storage_init(const char *_blockdir)
         scratch_read_mutex[i] = PTHREAD_MUTEX_INITIALIZER;
     }
 
-    if (getenv("S3BD_KEEP_SCRATCH_FILE") == nullptr)
+    if (getenv(S3BD_KEEP_SCRATCH_FILE) == nullptr)
     {
         unlink(scratch_filename);
     }
 
     if (lru_cache == nullptr)
     {
-        if ((lru_cache = new lru_cache_t(256 / 4)) == nullptr)
+        uint64_t local_cache_megabytes;
+        uint64_t local_cache_extents;
+        const char *str;
+
+        if ((str = getenv(S3BD_LOCAL_CACHE_MEGABYTES)) != nullptr)
+        {
+            sscanf(str, "%lu", &local_cache_megabytes);
+        }
+        else
+        {
+            local_cache_megabytes = LOCAL_CACHE_MEGABYTES;
+        }
+        local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
+
+        if ((lru_cache = new lru_cache_t(local_cache_extents)) == nullptr)
         {
             throw new std::bad_alloc();
         }
@@ -176,7 +190,7 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
     pthread_mutex_lock(&scratch_write_lock);
 
     // Open extent file for writing
-    // XXX extent only being written to by one thread (currently guranteed by scratch_write_lock)
+    // XXX ensure extent only being written to by one thread (currently guranteed by scratch_write_lock)
     char filename[0x100];
     VSILFILE *handle = NULL;
     sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
