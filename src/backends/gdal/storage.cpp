@@ -32,6 +32,8 @@
 #include <cassert>
 #include <set>
 
+#include <boost/compute/detail/lru_cache.hpp>
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -44,6 +46,43 @@
 
 #include "storage.h"
 #include "fullio.h"
+
+static void *delayed_flush_extent(void *); // Forward declaration
+
+class extent_tag_entry
+{
+public:
+    extent_tag_entry() : tag(-1), triggerable(false) {}
+
+    extent_tag_entry(uint64_t page_tag) : tag(page_tag & ~EXTENT_MASK), triggerable(false) {}
+
+    extent_tag_entry(const extent_tag_entry &rhs) : tag(rhs.tag), triggerable(false) {}
+
+    ~extent_tag_entry()
+    {
+        if (tag != static_cast<uint64_t>(-1) && triggerable)
+        {
+            pthread_t thread;
+            pthread_create(&thread, NULL, delayed_flush_extent, reinterpret_cast<void *>(tag));
+            pthread_detach(thread);
+        }
+    }
+
+    extent_tag_entry &operator=(const extent_tag_entry &rhs)
+    {
+        tag = rhs.tag;
+        triggerable = true;
+        return *this;
+    }
+
+private:
+    uint64_t tag;
+    bool triggerable;
+};
+
+typedef boost::compute::detail::lru_cache<uint64_t, extent_tag_entry> lru_cache_t;
+static lru_cache_t *lru_cache = nullptr;
+static pthread_mutex_t cache_lock;
 
 static const char *blockdir = nullptr;
 
@@ -70,6 +109,8 @@ void storage_init(const char *_blockdir)
     assert(_blockdir != nullptr);
     blockdir = _blockdir;
 
+    cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
     dirty_extent_lock = PTHREAD_RWLOCK_INITIALIZER;
 
     scratch_write_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -87,6 +128,14 @@ void storage_init(const char *_blockdir)
         unlink(scratch_filename);
     }
 
+    if (lru_cache == nullptr)
+    {
+        if ((lru_cache = new lru_cache_t(256 / 4)) == nullptr)
+        {
+            throw new std::bad_alloc();
+        }
+    }
+
     if (dirty_extent_set == nullptr)
     {
         if ((dirty_extent_set = new dirty_extent_set_t()) == nullptr)
@@ -101,6 +150,12 @@ void storage_init(const char *_blockdir)
  */
 void storage_deinit()
 {
+    if (lru_cache != nullptr)
+    {
+        delete lru_cache;
+        lru_cache = nullptr;
+    }
+
     if (dirty_extent_set != nullptr)
     {
         delete dirty_extent_set;
@@ -114,9 +169,10 @@ void storage_deinit()
  * should ever be active at once.
  *
  * @param page_tag The tag whose entire extent should be flushed
+ * @param should_remove Whether or not to remove the extent from the local cache
  * @return Boolean indicating success or failure
  */
-bool flush_extent(uint64_t extent_tag)
+bool flush_extent(uint64_t extent_tag, bool should_remove = false)
 {
     uint8_t *extent = new uint8_t[EXTENT_SIZE];
 
@@ -171,7 +227,13 @@ bool flush_extent(uint64_t extent_tag)
         }
     }
 
-    // Remove entry dirty set
+    if (should_remove)
+    {
+        // Remove entry from scratch file
+        fallocate(scratch_write_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, extent_tag, EXTENT_SIZE);
+    }
+
+    // Remove entry from dirty set
     dirty_extent_set->erase(extent_tag);
 
     // Close extent file
@@ -231,6 +293,11 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
     int index = 0;
 
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
+
+    // Note that the page has been touched
+    pthread_mutex_lock(&cache_lock);
+    lru_cache->insert(page_tag & ~EXTENT_MASK, extent_tag_entry(page_tag));
+    pthread_mutex_unlock(&cache_lock);
 
     GET_FD(index); // Aquire a file descriptor for reading
 
@@ -328,6 +395,11 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
 bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
+
+    // Note that the page has been touched
+    pthread_mutex_lock(&cache_lock);
+    lru_cache->insert(page_tag & ~EXTENT_MASK, extent_tag_entry(page_tag));
+    pthread_mutex_unlock(&cache_lock);
 
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
@@ -454,4 +526,19 @@ extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
             return size2 + storage_write(page_tag + PAGE_SIZE, size - size2, bytes + size2);
         }
     }
+}
+
+/**
+ * Flush the given extent after a short delay.
+ *
+ * @param _tag The tag of the extent to flush
+ * @return Always nullptr
+ */
+void *delayed_flush_extent(void *_tag)
+{
+    uint64_t tag = reinterpret_cast<uint64_t>(_tag);
+
+    sleep(1);
+    flush_extent(tag, true);
+    return nullptr;
 }
