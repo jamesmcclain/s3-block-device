@@ -29,6 +29,7 @@
 #include <cstdint>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <set>
 
@@ -47,40 +48,8 @@
 #include "storage.h"
 #include "fullio.h"
 
-static void *delayed_flush_extent(void *); // Forward declaration
-
-class extent_tag_entry
-{
-public:
-    extent_tag_entry() : tag(-1), triggerable(false) {}
-
-    extent_tag_entry(uint64_t page_tag) : tag(page_tag & ~EXTENT_MASK), triggerable(false) {}
-
-    extent_tag_entry(const extent_tag_entry &rhs) : tag(rhs.tag), triggerable(false) {}
-
-    ~extent_tag_entry()
-    {
-        if (tag != static_cast<uint64_t>(-1) && triggerable)
-        {
-            pthread_t thread;
-            pthread_create(&thread, NULL, delayed_flush_extent, reinterpret_cast<void *>(tag));
-            pthread_detach(thread);
-        }
-    }
-
-    extent_tag_entry &operator=(const extent_tag_entry &rhs)
-    {
-        tag = rhs.tag;
-        triggerable = true;
-        return *this;
-    }
-
-private:
-    uint64_t tag;
-    bool triggerable;
-};
-
-typedef boost::compute::detail::lru_cache<uint64_t, extent_tag_entry> lru_cache_t;
+typedef boost::compute::detail::lru_cache<uint64_t, bool> lru_cache_t;
+static std::atomic<int> background_threads{0};
 static lru_cache_t *lru_cache = nullptr;
 static pthread_mutex_t cache_lock;
 
@@ -191,7 +160,8 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
     for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
     {
         uint64_t inner_offset = i * PAGE_SIZE;
-        aligned_page_read(extent_tag + inner_offset, PAGE_SIZE, extent + inner_offset);
+        bool should_report = !should_remove; // Pages are about to be removed, so no reason to report them as touched
+        aligned_page_read(extent_tag + inner_offset, PAGE_SIZE, extent + inner_offset, should_report);
     }
 
     // Acquire locks
@@ -199,6 +169,7 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
     pthread_mutex_lock(&scratch_write_lock);
 
     // Open extent file for writing
+    // XXX extent only being written to by one thread (currently guranteed by scratch_write_lock)
     char filename[0x100];
     VSILFILE *handle = NULL;
     sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
@@ -288,16 +259,19 @@ int storage_flush()
  * @param bytes The array in which to return the bytes
  * @return Boolean indicating success or failure
  */
-bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes)
+bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report)
 {
     int index = 0;
 
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
 
     // Note that the page has been touched
-    pthread_mutex_lock(&cache_lock);
-    lru_cache->insert(page_tag & ~EXTENT_MASK, extent_tag_entry(page_tag));
-    pthread_mutex_unlock(&cache_lock);
+    if (should_report)
+    {
+        pthread_mutex_lock(&cache_lock);
+        lru_cache->insert(page_tag & ~EXTENT_MASK, true);
+        pthread_mutex_unlock(&cache_lock);
+    }
 
     GET_FD(index); // Aquire a file descriptor for reading
 
@@ -398,7 +372,7 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
 
     // Note that the page has been touched
     pthread_mutex_lock(&cache_lock);
-    lru_cache->insert(page_tag & ~EXTENT_MASK, extent_tag_entry(page_tag));
+    lru_cache->insert(page_tag & ~EXTENT_MASK, false);
     pthread_mutex_unlock(&cache_lock);
 
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
@@ -538,7 +512,32 @@ void *delayed_flush_extent(void *_tag)
 {
     uint64_t tag = reinterpret_cast<uint64_t>(_tag);
 
+    background_threads++;
     sleep(1);
     flush_extent(tag, true);
+    background_threads--;
     return nullptr;
+}
+
+/**
+ * Specialization of the lru_cache_t::evict method.
+ */
+template <>
+void lru_cache_t::evict()
+{
+    pthread_t thread;
+    uint64_t tag;
+
+    // evict item from the end of most recently used list
+    typename list_type::iterator i = --m_list.end();
+    tag = *i;
+    m_map.erase(*i);
+    m_list.erase(i);
+
+    fprintf(stderr, "XXY %s:%d %016lX\n", __FILE__, __LINE__, tag);
+    while (background_threads >= APPROX_MAX_BACKGROUND_THREADS)
+    {
+    }
+    pthread_create(&thread, NULL, delayed_flush_extent, reinterpret_cast<void *>(tag));
+    pthread_detach(thread);
 }

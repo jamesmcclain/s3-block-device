@@ -33,6 +33,7 @@ constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
 constexpr uint64_t PAGES_PER_EXTENT = (1 << 10);
 constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
 constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
+constexpr int APPROX_MAX_BACKGROUND_THREADS = 16;
 
 #define EXTENT_TEMPLATE "%s/%016lX.extent"
 #define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
@@ -50,7 +51,7 @@ extern "C"
 #ifdef __cplusplus
 }
 
-bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes);
+bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report = true);
 bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
 
 #endif
