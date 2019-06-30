@@ -371,6 +371,10 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
             }
         }
 
+        if (handle != NULL)
+        {
+            VSIFCloseL(handle);
+        }
         RELEASE_FD(index);
 
         delete scratch_page;
