@@ -152,6 +152,13 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
     if (dirty_extent_set->count(extent_tag) < 1)
     {
         pthread_rwlock_unlock(&dirty_extent_lock);
+        if (should_remove)
+        {
+            // Remove entry from scratch file
+            pthread_mutex_lock(&scratch_write_lock);
+            fallocate(scratch_write_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, extent_tag, EXTENT_SIZE);
+            pthread_mutex_unlock(&scratch_write_lock);
+        }
         return true;
     }
     pthread_rwlock_unlock(&dirty_extent_lock);
