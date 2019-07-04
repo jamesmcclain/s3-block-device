@@ -33,8 +33,8 @@ constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
 constexpr uint64_t PAGES_PER_EXTENT = (1 << 10);
 constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
 constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
-constexpr uint64_t LOCAL_CACHE_MEGABYTES = 4096;
-constexpr int APPROX_MAX_BACKGROUND_THREADS = 16;
+constexpr uint64_t LOCAL_CACHE_DEFAULT_MEGABYTES = 4096;
+constexpr int APPROX_MAX_BACKGROUND_THREADS = 64;
 
 #define EXTENT_TEMPLATE "%s/%016lX.extent"
 #define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
@@ -47,7 +47,6 @@ extern "C"
 
     void storage_init(const char *_blockdir);
     void storage_deinit();
-    int storage_flush();
     int storage_read(off_t offset, size_t size, uint8_t *bytes);
     int storage_write(off_t offset, size_t size, const uint8_t *bytes);
 
@@ -56,6 +55,7 @@ extern "C"
 
 bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report = true);
 bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
+void *storage_flush(void *arg);
 
 #endif
 #endif
