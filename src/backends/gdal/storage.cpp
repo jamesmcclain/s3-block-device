@@ -31,7 +31,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <map>
 #include <vector>
 
 #include <sys/types.h>
@@ -44,30 +43,14 @@
 
 #include <pthread.h>
 
-#include "storage.h"
 #include "constants.h"
+#include "storage.h"
 #include "lru.h"
+#include "extent.h"
 #include "fullio.h"
 
 // Block directory name
 static const char *blockdir = nullptr;
-
-// Extent locking
-typedef struct
-{
-    bool dirty;
-    int refcount;
-} extent_entry_t;
-typedef std::map<uint64_t, extent_entry_t> extent_map_t;
-typedef struct
-{
-    pthread_mutex_t lock;
-    extent_map_t entries;
-} extent_bucket_t;
-typedef std::vector<extent_bucket_t> extent_buckets_t;
-typedef std::hash<uint64_t> extent_bucket_hash_t;
-static extent_bucket_hash_t extent_bucket_hash = extent_bucket_hash_t{};
-static extent_buckets_t extent_buckets = extent_buckets_t{};
 
 // Scratch file
 typedef struct
@@ -90,160 +73,6 @@ static pthread_t reaper_thread;
 #endif
 
 // ------------------------------------------------------------------------
-
-/**
- * Get lock on an extent.
- *
- * @param extent_tag The tag of the extent
- * @param wrlock True if write lock requested, false if read lock requested
- * @return A boolean indicating success or failure
- */
-static bool extent_lock(uint64_t extent_tag, bool wrlock)
-{
-    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
-
-    auto index = extent_bucket_hash(extent_tag) % extent_buckets.size();
-    auto &bucket = extent_buckets[index];
-
-    pthread_mutex_lock(&bucket.lock);
-    auto itr = bucket.entries.find(extent_tag);
-    if (itr != bucket.entries.end()) // Existing entry
-    {
-        if ((wrlock && itr->second.refcount != 0) || (!wrlock && itr->second.refcount < 0)) // Cannot get write lock || write lock already held
-        {
-            pthread_mutex_unlock(&bucket.lock);
-            return false;
-        }
-        else // No write locks currently held
-        {
-            if (wrlock) // Write lock
-            {
-                itr->second.dirty = true;
-                itr->second.refcount--;
-            }
-            else // Read lock
-            {
-                itr->second.refcount++;
-            }
-            pthread_mutex_unlock(&bucket.lock);
-            return true;
-        }
-    }
-    else // No existing entry, make one
-    {
-        if (wrlock) // Write lock
-        {
-            // "true" means "dirty", "-1" means "write lock held"
-            bucket.entries.insert(std::make_pair(extent_tag, extent_entry_t{true, -1}));
-        }
-        else // Read lock
-        {
-            // "false" means "not dirty", "+1" means "one read lock held"
-            bucket.entries.insert(std::make_pair(extent_tag, extent_entry_t{false, +1}));
-        }
-        pthread_mutex_unlock(&bucket.lock);
-        return true;
-    }
-}
-
-static void extent_spin_lock(uint64_t extent_tag, bool wrlock)
-{
-    while (!extent_lock(extent_tag, wrlock))
-    {
-        sleep(0);
-    }
-}
-
-/**
- * Release lock on an extent.
- *
- * @param extent_tag The tag of the extent
- * @param wrlock True if dropping write lock, false if dropping read lock
- * @param mark_clean True if wrlock and extent should be marked clean, false otherwise
- */
-static void extent_unlock(uint64_t extent_tag, bool wrlock, bool mark_clean)
-{
-    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
-
-    auto index = extent_bucket_hash(extent_tag) % extent_buckets.size();
-    auto &bucket = extent_buckets[index];
-
-    pthread_mutex_lock(&bucket.lock);
-    auto itr = bucket.entries.find(extent_tag);
-    if (itr != bucket.entries.end()) // Existing entry
-    {
-        if (wrlock)
-        {
-            assert(itr->second.refcount == -1);
-            if (mark_clean)
-            {
-                itr->second.dirty = false;
-            }
-            itr->second.refcount++;
-        }
-        else
-        {
-            itr->second.refcount--;
-        }
-    }
-    else // No existing entry
-    {
-        assert(false);
-    }
-    pthread_mutex_unlock(&bucket.lock);
-}
-
-/**
- * Answer whether the extent is dirty or not.
- *
- * @param extent_tag The tag of the extent
- * @return A boolean
- */
-static bool extent_dirty(uint64_t extent_tag)
-{
-    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
-
-    auto index = extent_bucket_hash(extent_tag) % extent_buckets.size();
-    auto &bucket = extent_buckets[index];
-    auto itr = bucket.entries.find(extent_tag);
-
-    assert(itr != bucket.entries.end());
-
-    return itr->second.dirty;
-}
-
-/**
- * Answer whether the extent is clean or not.
- *
- * @param extent_Tag The tag of the extent
- * @return A boolean
- */
-static inline bool extent_clean(uint64_t extent_tag)
-{
-    return !(extent_dirty(extent_tag));
-}
-
-static bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag)
-{
-    for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
-    {
-        auto &bucket = extent_buckets[i];
-
-        pthread_mutex_lock(&bucket.lock);
-        for (auto itr = bucket.entries.begin(); itr != bucket.entries.end(); ++itr)
-        {
-            if (itr->second.dirty && itr->second.refcount == 0)
-            {
-                uint64_t retval = itr->first;
-                pthread_mutex_unlock(&bucket.lock);
-                *extent_tag = retval;
-                return true;
-            }
-        }
-        pthread_mutex_unlock(&bucket.lock);
-    }
-    return false;
-}
 
 // XXX clean extent entry reaper thread
 
@@ -306,12 +135,7 @@ void storage_init(const char *_blockdir)
     blockdir = _blockdir;
 
     // Extent locking
-    for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
-    {
-        extent_buckets.push_back(extent_bucket_t{
-            PTHREAD_MUTEX_INITIALIZER,
-            extent_map_t{}});
-    }
+    extent_init();
 
     // Scratch file
     {
@@ -373,7 +197,7 @@ void storage_deinit()
         close(locked_fd_vector[i].fd);
     }
     locked_fd_vector.clear();
-    extent_buckets.clear();
+    extent_deinit();
     lru_deinit();
 }
 
