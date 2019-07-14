@@ -28,7 +28,10 @@
 #include <cstddef>
 #include <cstdint>
 
-void lru_init(size_t size, void *(*f)(void *));
+extern bool sync_thread_continue;
+extern int sync_thread_interval;
+
+void lru_init(void *(*f)(void *), void *(*g)(void *));
 void lru_deinit();
 void lru_report_page(uint64_t page_tag);
 void lru_aquire_thread();

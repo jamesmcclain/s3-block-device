@@ -37,7 +37,13 @@ typedef boost::compute::detail::lru_cache<uint64_t, bool> lru_cache_t;
 static std::atomic<int> lru_cache_threads{0};
 static lru_cache_t lru_cache{0};
 static pthread_mutex_t lru_cache_lock;
+
+static pthread_t sync_thread;
+bool sync_thread_continue = false;
+int sync_thread_interval = SYNC_INTERVAL_DEFAULT;
+
 static void *(*lru_flusher)(void *) = nullptr;
+static void *(*continuous_flusher)(void *) = nullptr;
 
 /**
  * Specialization of the lru_cache_t::evict method.
@@ -67,11 +73,31 @@ void lru_cache_t::evict()
  *
  * @param size The maximuim number of cache entries.
  */
-void lru_init(size_t size, void *(*f)(void *))
+void lru_init(void *(*f)(void *), void *(*g)(void *))
 {
+    size_t local_cache_megabytes = LOCAL_CACHE_DEFAULT_MEGABYTES;
+    size_t local_cache_extents;
+    const char *str;
+
     lru_flusher = f;
+    continuous_flusher = g;
+
+    // LRU flush
+    if ((str = getenv(S3BD_LOCAL_CACHE_MEGABYTES)) != nullptr)
+    {
+        sscanf(str, "%lu", &local_cache_megabytes);
+    }
+    local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
     lru_cache_lock = PTHREAD_MUTEX_INITIALIZER;
-    lru_cache = lru_cache_t{size};
+    lru_cache = lru_cache_t{local_cache_extents};
+
+    // Continuous flush
+    if ((str = getenv(S3BD_SYNC_INTERVAL)) != nullptr)
+    {
+        sscanf(str, "%d", &sync_thread_interval);
+    }
+    sync_thread_continue = true;
+    pthread_create(&sync_thread, NULL, continuous_flusher, nullptr);
 }
 
 /**
@@ -79,6 +105,8 @@ void lru_init(size_t size, void *(*f)(void *))
  */
 void lru_deinit()
 {
+    sync_thread_continue = false;
+    pthread_join(sync_thread, nullptr);
     lru_cache.clear();
 }
 

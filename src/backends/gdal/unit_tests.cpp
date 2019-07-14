@@ -30,6 +30,7 @@
 #include <gdal.h>
 #include <cpl_vsi.h>
 
+#include "constants.h"
 #include "storage.h"
 
 constexpr uint64_t backed_extent_tag = 1 * EXTENT_SIZE;

@@ -29,9 +29,6 @@
 #include <cstdint>
 #include <cstring>
 
-#include <algorithm>
-#include <vector>
-
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -52,11 +49,6 @@
 // Block directory name
 static const char *blockdir = nullptr;
 
-// Sync thread
-static bool sync_thread_continue = false;
-static pthread_t sync_thread;
-static int storage_sync_interval = SYNC_INTERVAL_DEFAULT;
-
 #if 0
 // Extent entry reaper thread
 static bool reaper_thread_continue = false;
@@ -70,6 +62,7 @@ static pthread_t reaper_thread;
 // ------------------------------------------------------------------------
 
 void *delayed_flush_extent(void *arg);
+void *continuous_flush_extent(void *arg);
 
 /**
  * Initialize storage.
@@ -78,38 +71,10 @@ void *delayed_flush_extent(void *arg);
  */
 void storage_init(const char *_blockdir)
 {
-
-    // Note blockdir
     blockdir = _blockdir;
-
     extent_init();
     scratch_init();
-
-    // LRU cache
-    {
-        size_t local_cache_megabytes = LOCAL_CACHE_DEFAULT_MEGABYTES;
-        size_t local_cache_extents;
-        const char *str;
-
-        if ((str = getenv(S3BD_LOCAL_CACHE_MEGABYTES)) != nullptr)
-        {
-            sscanf(str, "%lu", &local_cache_megabytes);
-        }
-        local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
-        lru_init(local_cache_extents, delayed_flush_extent);
-    }
-
-    // Start the storage flush thread
-    {
-        const char *str;
-
-        if ((str = getenv(S3BD_SYNC_INTERVAL)) != nullptr)
-        {
-            sscanf(str, "%d", &storage_sync_interval);
-        }
-        sync_thread_continue = true;
-        pthread_create(&sync_thread, NULL, storage_flush, nullptr);
-    }
+    lru_init(delayed_flush_extent, continuous_flush_extent);
 }
 
 /**
@@ -117,12 +82,10 @@ void storage_init(const char *_blockdir)
  */
 void storage_deinit()
 {
-    sync_thread_continue = false;
-    pthread_join(sync_thread, nullptr);
-
-    extent_deinit();
-    scratch_deinit();
     lru_deinit();
+    scratch_deinit();
+    extent_deinit();
+    blockdir = nullptr;
 }
 
 /**
@@ -217,29 +180,6 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
     delete extent_array;
 
     return true;
-}
-
-/**
- * Synchronously flush all dirty pages to storage.
- *
- * @return nullptr
- */
-void *storage_flush(void *arg)
-{
-    while (sync_thread_continue)
-    {
-        uint64_t extent_tag;
-
-        if (extent_first_dirty_and_unreferenced(&extent_tag))
-        {
-            flush_extent(extent_tag);
-        }
-        else
-        {
-            sleep(storage_sync_interval);
-        }
-    }
-    return nullptr;
 }
 
 /**
@@ -517,3 +457,26 @@ void *delayed_flush_extent(void *arg)
     return nullptr;
 }
 
+/**
+ * Continuously flush all dirty pages to storage.
+ *
+ * @param arg Unused
+ * @return Always nullptr
+ */
+void *continuous_flush_extent(void *arg)
+{
+    while (sync_thread_continue)
+    {
+        uint64_t extent_tag;
+
+        if (extent_first_dirty_and_unreferenced(&extent_tag))
+        {
+            flush_extent(extent_tag);
+        }
+        else
+        {
+            sleep(sync_thread_interval);
+        }
+    }
+    return nullptr;
+}
