@@ -22,29 +22,15 @@
  * THE SOFTWARE.
  */
 
-#ifndef __STORAGE_H__
-#define __STORAGE_H__
+#ifndef __SCRATCH_H__
+#define __SCRATCH_H__
 
-#include <stddef.h>
-#include <stdint.h>
-#include <sys/types.h>
+#include <cstddef>
 
-#ifdef __cplusplus
-extern "C"
-{
-#endif
+void scratch_init();
+void scratch_deinit();
+size_t aquire_scratch_handle();
+int scratch_handle_to_fd(size_t handle);
+void release_scratch_handle(size_t handle);
 
-    void storage_init(const char *_blockdir);
-    void storage_deinit();
-    int storage_read(off_t offset, size_t size, uint8_t *bytes);
-    int storage_write(off_t offset, size_t size, const uint8_t *bytes);
-
-#ifdef __cplusplus
-}
-
-bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report = true);
-bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
-void *storage_flush(void *arg);
-
-#endif
 #endif

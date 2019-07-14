@@ -78,10 +78,10 @@ int s3bd_open(const char *path, struct fuse_file_info *fi)
 
 int s3bd_flush(const char *path, struct fuse_file_info *fi)
 {
-    return storage_flush();
+    return 0;
 }
 
 int s3bd_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
-    return s3bd_flush("", fi);
+    return 0;
 }

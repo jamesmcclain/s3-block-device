@@ -25,15 +25,9 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
-#include <cstdint>
-
-#include <algorithm>
-#include <atomic>
 #include <cassert>
-#include <set>
-
-#include <boost/compute/detail/lru_cache.hpp>
+#include <cstdint>
+#include <cstring>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -45,26 +39,30 @@
 
 #include <pthread.h>
 
+#include "constants.h"
 #include "storage.h"
+#include "lru.h"
+#include "extent.h"
+#include "scratch.h"
 #include "fullio.h"
 
-typedef boost::compute::detail::lru_cache<uint64_t, bool> lru_cache_t;
-static std::atomic<int> background_threads{0};
-static lru_cache_t *lru_cache = nullptr;
-static pthread_mutex_t cache_lock;
-
+// Block directory name
 static const char *blockdir = nullptr;
 
-typedef std::set<uint64_t> dirty_extent_set_t;
-static dirty_extent_set_t *dirty_extent_set = nullptr;
-static pthread_rwlock_t dirty_extent_lock;
+#if 0
+// Extent entry reaper thread
+static bool reaper_thread_continue = false;
+static pthread_t reaper_thread;
+#endif
 
-static int scratch_write_fd = -1;
-static pthread_mutex_t scratch_write_lock;
+// ------------------------------------------------------------------------
 
-static constexpr int SCRATCH_FD_COUNT = 8;
-static int scratch_read_fd[SCRATCH_FD_COUNT];
-static pthread_mutex_t scratch_read_mutex[SCRATCH_FD_COUNT];
+// XXX clean extent entry reaper thread
+
+// ------------------------------------------------------------------------
+
+void *delayed_flush_extent(void *arg);
+void *continuous_flush_extent(void *arg);
 
 /**
  * Initialize storage.
@@ -73,59 +71,10 @@ static pthread_mutex_t scratch_read_mutex[SCRATCH_FD_COUNT];
  */
 void storage_init(const char *_blockdir)
 {
-    char scratch_filename[0x100];
-
-    assert(_blockdir != nullptr);
     blockdir = _blockdir;
-
-    cache_lock = PTHREAD_MUTEX_INITIALIZER;
-
-    dirty_extent_lock = PTHREAD_RWLOCK_INITIALIZER;
-
-    scratch_write_lock = PTHREAD_MUTEX_INITIALIZER;
-    sprintf(scratch_filename, SCRATCH_TEMPLATE, getpid());
-    scratch_write_fd = open(scratch_filename, O_RDWR | O_CREAT, S_IRWXU);
-
-    for (int i = 0; i < SCRATCH_FD_COUNT; ++i)
-    {
-        scratch_read_fd[i] = open(scratch_filename, O_RDONLY);
-        scratch_read_mutex[i] = PTHREAD_MUTEX_INITIALIZER;
-    }
-
-    if (getenv(S3BD_KEEP_SCRATCH_FILE) == nullptr)
-    {
-        unlink(scratch_filename);
-    }
-
-    if (lru_cache == nullptr)
-    {
-        uint64_t local_cache_megabytes;
-        uint64_t local_cache_extents;
-        const char *str;
-
-        if ((str = getenv(S3BD_LOCAL_CACHE_MEGABYTES)) != nullptr)
-        {
-            sscanf(str, "%lu", &local_cache_megabytes);
-        }
-        else
-        {
-            local_cache_megabytes = LOCAL_CACHE_MEGABYTES;
-        }
-        local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
-
-        if ((lru_cache = new lru_cache_t(local_cache_extents)) == nullptr)
-        {
-            throw new std::bad_alloc();
-        }
-    }
-
-    if (dirty_extent_set == nullptr)
-    {
-        if ((dirty_extent_set = new dirty_extent_set_t()) == nullptr)
-        {
-            throw std::bad_alloc();
-        }
-    }
+    extent_init();
+    scratch_init();
+    lru_init(delayed_flush_extent, continuous_flush_extent);
 }
 
 /**
@@ -133,18 +82,10 @@ void storage_init(const char *_blockdir)
  */
 void storage_deinit()
 {
-    if (lru_cache != nullptr)
-    {
-        delete lru_cache;
-        lru_cache = nullptr;
-    }
-
-    if (dirty_extent_set != nullptr)
-    {
-        delete dirty_extent_set;
-        dirty_extent_set = nullptr;
-    }
-    close(scratch_write_fd);
+    lru_deinit();
+    scratch_deinit();
+    extent_deinit();
+    blockdir = nullptr;
 }
 
 /**
@@ -157,120 +98,89 @@ void storage_deinit()
  */
 bool flush_extent(uint64_t extent_tag, bool should_remove = false)
 {
-    uint8_t *extent = new uint8_t[EXTENT_SIZE];
+    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
 
-    assert(extent_tag == (extent_tag & (~EXTENT_MASK))); // Assert alignment
+    uint8_t *extent_array = new uint8_t[EXTENT_SIZE];
 
-    // Ensure that the extent is actually dirty
-    pthread_rwlock_rdlock(&dirty_extent_lock);
-    if (dirty_extent_set->count(extent_tag) < 1)
+    // If the extent is clean, leave quickly (possibly punching a hole if needed)
+    extent_spin_lock(extent_tag, true);
+    if (extent_clean(extent_tag))
     {
-        pthread_rwlock_unlock(&dirty_extent_lock);
         if (should_remove)
         {
-            // Remove entry from scratch file
-            pthread_mutex_lock(&scratch_write_lock);
-            fallocate(scratch_write_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, extent_tag, EXTENT_SIZE);
-            pthread_mutex_unlock(&scratch_write_lock);
+            auto scratch_handle = aquire_scratch_handle();
+            fallocate(
+                scratch_handle_to_fd(scratch_handle),
+                FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                extent_tag,
+                EXTENT_SIZE);
+            release_scratch_handle(scratch_handle);
         }
+        extent_unlock(extent_tag, true, true);
         return true;
     }
-    pthread_rwlock_unlock(&dirty_extent_lock);
+    extent_unlock(extent_tag, true, false);
 
-    // Bring all pages into the array `extent`
+    // Bring contents of all pages into "extent_array"
     for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
     {
         uint64_t inner_offset = i * PAGE_SIZE;
-        bool should_report = !should_remove; // Pages are about to be removed, so no reason to report them as touched
-        aligned_page_read(extent_tag + inner_offset, PAGE_SIZE, extent + inner_offset, should_report);
+        bool should_report = !should_remove; // If pages are about to be removed, then no reason to report them as touched
+        aligned_page_read(
+            extent_tag + inner_offset,
+            PAGE_SIZE,
+            extent_array + inner_offset,
+            should_report);
     }
 
-    // Acquire locks
-    pthread_rwlock_wrlock(&dirty_extent_lock);
-    pthread_mutex_lock(&scratch_write_lock);
-
     // Open extent file for writing
-    // XXX ensure extent only being written to by one thread (currently guranteed by scratch_write_lock)
+    extent_spin_lock(extent_tag, true);
     char filename[0x100];
     VSILFILE *handle = NULL;
     sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
     if ((handle = VSIFOpenL(filename, "w")) == NULL)
     {
-        delete extent;
-        pthread_mutex_unlock(&scratch_write_lock);
-        pthread_rwlock_unlock(&dirty_extent_lock);
+        delete extent_array;
+        extent_unlock(extent_tag, true, false);
         return false;
     }
 
-    // Copy all pages from the array `extent`
+    // Copy all pages from extent_array
     for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
     {
         uint64_t offset = i * PAGE_SIZE;
 
         // Write into extent file
-        if (VSIFWriteL(extent + offset, PAGE_SIZE, 1, handle) != 1)
+        if (VSIFWriteL(extent_array + offset, PAGE_SIZE, 1, handle) != 1)
         {
-            pthread_mutex_unlock(&scratch_write_lock);
-            pthread_rwlock_unlock(&dirty_extent_lock);
             VSIFFlushL(handle);
             VSIFCloseL(handle);
-            delete extent;
+            delete extent_array;
+            extent_unlock(extent_tag, true, false);
             return false;
         }
     }
 
     if (should_remove)
     {
-        // Remove entry from scratch file
-        fallocate(scratch_write_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, extent_tag, EXTENT_SIZE);
+        // Punch hole
+        auto scratch_handle = aquire_scratch_handle();
+        fallocate(
+            scratch_handle_to_fd(scratch_handle),
+            FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+            extent_tag,
+            EXTENT_SIZE);
+        release_scratch_handle(scratch_handle);
     }
 
-    // Remove entry from dirty set
-    dirty_extent_set->erase(extent_tag);
-
-    // Close extent file
+    // Close extent file, release locks, delete array
     VSIFFlushL(handle);
     VSIFCloseL(handle);
-
-    // Release locks
-    pthread_mutex_unlock(&scratch_write_lock);
-    pthread_rwlock_unlock(&dirty_extent_lock);
-
-    delete extent;
+    extent_unlock(extent_tag, true, true);
+    delete extent_array;
 
     return true;
 }
-
-/**
- * Flush all pages to storage.
- * 
- * @return 0 on success, -1 on failure
- */
-int storage_flush()
-{
-    while (true)
-    {
-        pthread_rwlock_rdlock(&dirty_extent_lock);
-        auto itr = dirty_extent_set->begin();
-        if (itr == dirty_extent_set->end())
-        {
-            pthread_rwlock_unlock(&dirty_extent_lock);
-            return 0;
-        }
-        else
-        {
-            uint64_t extent_tag = *itr;
-            pthread_rwlock_unlock(&dirty_extent_lock);
-            flush_extent(extent_tag);
-        }
-    }
-    return 0;
-}
-
-#define GET_FD(index) \
-    for (index = 0; pthread_mutex_trylock(&scratch_read_mutex[index % SCRATCH_FD_COUNT]); ++index)
-#define USE_FD(index) (scratch_read_fd[index % SCRATCH_FD_COUNT])
-#define RELEASE_FD(index) pthread_mutex_unlock(&scratch_read_mutex[index % SCRATCH_FD_COUNT])
 
 /**
  * Attempt to read and return a page or less of data.
@@ -282,29 +192,30 @@ int storage_flush()
  */
 bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report)
 {
-    int index = 0;
-
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
+
+    uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
     // Note that the page has been touched
     if (should_report)
     {
-        pthread_mutex_lock(&cache_lock);
-        lru_cache->insert(page_tag & ~EXTENT_MASK, true);
-        pthread_mutex_unlock(&cache_lock);
+        lru_report_page(page_tag);
     }
 
-    GET_FD(index); // Aquire a file descriptor for reading
+    // Acquire resources
+    extent_spin_lock(extent_tag, false);
+    auto scratch_handle = aquire_scratch_handle();
+    int fd = scratch_handle_to_fd(scratch_handle);
 
-    if (lseek(USE_FD(index), page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If page exists ...
+    if (lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If page already exists ...
     {
-        fullread(USE_FD(index), bytes, size);
-        RELEASE_FD(index);
+        fullread(fd, bytes, size);
+        release_scratch_handle(scratch_handle);
+        extent_unlock(extent_tag, false, false);
         return true;
     }
     else // If the page does not yet exist ...
     {
-        uint64_t extent_tag = page_tag & (~EXTENT_MASK);
         char filename[0x100];
         VSILFILE *handle = NULL;
         uint8_t *scratch_page = new uint8_t[PAGE_SIZE];
@@ -319,15 +230,15 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
             uint64_t offset = (i * PAGE_SIZE);
             uint64_t inner_page_tag = extent_tag + offset;
 
-            if (lseek(USE_FD(index), inner_page_tag, SEEK_DATA) == static_cast<off_t>(inner_page_tag)) // If the page already exists ...
+            if (lseek(fd, inner_page_tag, SEEK_DATA) == static_cast<off_t>(inner_page_tag)) // If the page already exists ...
             {
                 if (inner_page_tag == page_tag)
                 {
-                    fullread(USE_FD(index), bytes, size);
+                    fullread(fd, bytes, size);
                 }
                 continue;
             }
-            else // If the page does not exist ...
+            else // If the page does not yet exist ...
             {
                 if (handle == NULL) // .. and the extent file was not openable ...
                 {
@@ -340,28 +251,28 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
                 {
                     if (VSIFSeekL(handle, offset, SEEK_SET) != 0)
                     {
-                        RELEASE_FD(index);
+                        release_scratch_handle(scratch_handle);
+                        extent_unlock(extent_tag, false, false);
                         delete scratch_page;
                         return false;
                     }
                     if (VSIFReadL(scratch_page, PAGE_SIZE, 1, handle) != 1)
                     {
-                        RELEASE_FD(index);
+                        release_scratch_handle(scratch_handle);
+                        extent_unlock(extent_tag, false, false);
                         delete scratch_page;
                         return false;
                     }
 
-                    pthread_mutex_lock(&scratch_write_lock);
-                    if (lseek(scratch_write_fd, inner_page_tag, SEEK_SET) != static_cast<off_t>(inner_page_tag))
+                    // Attempt to write the page to the local scratch file
+                    if (lseek(fd, inner_page_tag, SEEK_SET) != static_cast<off_t>(inner_page_tag))
                     {
-                        pthread_mutex_unlock(&scratch_write_lock);
-                        RELEASE_FD(index);
+                        release_scratch_handle(scratch_handle);
+                        extent_unlock(extent_tag, false, false);
                         delete scratch_page;
                         return false;
                     }
-                    // write the page to the local scratch file
-                    fullwrite(scratch_write_fd, scratch_page, PAGE_SIZE);
-                    pthread_mutex_unlock(&scratch_write_lock);
+                    fullwrite(fd, scratch_page, PAGE_SIZE);
 
                     if (inner_page_tag == page_tag)
                     {
@@ -371,12 +282,13 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
             }
         }
 
+        // Release handle and other resources
         if (handle != NULL)
         {
             VSIFCloseL(handle);
         }
-        RELEASE_FD(index);
-
+        release_scratch_handle(scratch_handle);
+        extent_unlock(extent_tag, false, false);
         delete scratch_page;
 
         return true;
@@ -395,31 +307,27 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
 {
     assert(page_tag == (page_tag & (~PAGE_MASK))); // Assert alignment
 
-    // Note that the page has been touched
-    pthread_mutex_lock(&cache_lock);
-    lru_cache->insert(page_tag & ~EXTENT_MASK, false);
-    pthread_mutex_unlock(&cache_lock);
-
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
-    pthread_mutex_lock(&scratch_write_lock);
-    if (lseek(scratch_write_fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag))
+    // Note that the page has been touched
+    lru_report_page(page_tag);
+
+    // Acquire resources
+    extent_spin_lock(extent_tag, true);
+    auto scratch_handle = aquire_scratch_handle();
+    int fd = scratch_handle_to_fd(scratch_handle);
+
+    if (lseek(fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag))
     {
-        fullwrite(scratch_write_fd, bytes, PAGE_SIZE);
-        pthread_mutex_unlock(&scratch_write_lock);
-
-        pthread_rwlock_wrlock(&dirty_extent_lock);
-        if (dirty_extent_set->count(extent_tag) < 1)
-        {
-            dirty_extent_set->insert(extent_tag);
-        }
-        pthread_rwlock_unlock(&dirty_extent_lock);
-
+        fullwrite(fd, bytes, PAGE_SIZE);
+        release_scratch_handle(scratch_handle);
+        extent_unlock(extent_tag, true, false);
         return true;
     }
     else
     {
-        pthread_mutex_unlock(&scratch_write_lock);
+        release_scratch_handle(scratch_handle);
+        extent_unlock(extent_tag, true, false);
         return false;
     }
 }
@@ -527,42 +435,48 @@ extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
     }
 }
 
+// ------------------------------------------------------------------------
+
 /**
- * Flush the given extent after a short delay.
+ * Flush the given extent after a short delay.  The delay is to
+ * prevent thrashing if there is cache pressure and, for example, a
+ * page has been read as part of getting a complete extent to perform
+ * an extent write as part of an eviction.
  *
- * @param _tag The tag of the extent to flush
+ * @param arg The tag of the extent to flush
  * @return Always nullptr
  */
-void *delayed_flush_extent(void *_tag)
+void *delayed_flush_extent(void *arg)
 {
-    uint64_t tag = reinterpret_cast<uint64_t>(_tag);
+    uint64_t tag = reinterpret_cast<uint64_t>(arg);
 
-    background_threads++;
+    lru_aquire_thread();
     sleep(1);
     flush_extent(tag, true);
-    background_threads--;
+    lru_release_thread();
     return nullptr;
 }
 
 /**
- * Specialization of the lru_cache_t::evict method.
+ * Continuously flush all dirty pages to storage.
+ *
+ * @param arg Unused
+ * @return Always nullptr
  */
-template <>
-void lru_cache_t::evict()
+void *continuous_flush_extent(void *arg)
 {
-    pthread_t thread;
-    uint64_t tag;
-
-    // evict item from the end of most recently used list
-    typename list_type::iterator i = --m_list.end();
-    tag = *i;
-    m_map.erase(*i);
-    m_list.erase(i);
-
-    fprintf(stderr, "XXY %s:%d %016lX\n", __FILE__, __LINE__, tag);
-    while (background_threads >= APPROX_MAX_BACKGROUND_THREADS)
+    while (sync_thread_continue)
     {
+        uint64_t extent_tag;
+
+        if (extent_first_dirty_and_unreferenced(&extent_tag))
+        {
+            flush_extent(extent_tag);
+        }
+        else
+        {
+            sleep(sync_thread_interval);
+        }
     }
-    pthread_create(&thread, NULL, delayed_flush_extent, reinterpret_cast<void *>(tag));
-    pthread_detach(thread);
+    return nullptr;
 }

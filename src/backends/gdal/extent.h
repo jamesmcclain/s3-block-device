@@ -22,29 +22,18 @@
  * THE SOFTWARE.
  */
 
-#ifndef __STORAGE_H__
-#define __STORAGE_H__
+#ifndef __EXTENT_H__
+#define __EXTENT_H__
 
-#include <stddef.h>
-#include <stdint.h>
-#include <sys/types.h>
+#include <cstdint>
 
-#ifdef __cplusplus
-extern "C"
-{
-#endif
+void extent_init();
+void extent_deinit();
+bool extent_lock(uint64_t extent_tag, bool wrlock);
+void extent_spin_lock(uint64_t extent_tag, bool wrlock);
+void extent_unlock(uint64_t extent_tag, bool wrlock, bool mark_clean);
+bool extent_dirty(uint64_t extent_tag);
+bool extent_clean(uint64_t extent_tag);
+bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag);
 
-    void storage_init(const char *_blockdir);
-    void storage_deinit();
-    int storage_read(off_t offset, size_t size, uint8_t *bytes);
-    int storage_write(off_t offset, size_t size, const uint8_t *bytes);
-
-#ifdef __cplusplus
-}
-
-bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report = true);
-bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
-void *storage_flush(void *arg);
-
-#endif
 #endif

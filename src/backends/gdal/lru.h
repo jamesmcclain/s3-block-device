@@ -22,29 +22,19 @@
  * THE SOFTWARE.
  */
 
-#ifndef __STORAGE_H__
-#define __STORAGE_H__
+#ifndef __LRU_H__
+#define __LRU_H__
 
-#include <stddef.h>
-#include <stdint.h>
-#include <sys/types.h>
+#include <cstddef>
+#include <cstdint>
 
-#ifdef __cplusplus
-extern "C"
-{
-#endif
+extern bool sync_thread_continue;
+extern int sync_thread_interval;
 
-    void storage_init(const char *_blockdir);
-    void storage_deinit();
-    int storage_read(off_t offset, size_t size, uint8_t *bytes);
-    int storage_write(off_t offset, size_t size, const uint8_t *bytes);
+void lru_init(void *(*f)(void *), void *(*g)(void *));
+void lru_deinit();
+void lru_report_page(uint64_t page_tag);
+void lru_aquire_thread();
+void lru_release_thread();
 
-#ifdef __cplusplus
-}
-
-bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report = true);
-bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
-void *storage_flush(void *arg);
-
-#endif
 #endif
