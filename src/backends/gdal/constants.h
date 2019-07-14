@@ -22,27 +22,27 @@
  * THE SOFTWARE.
  */
 
-#ifndef __STORAGE_H__
-#define __STORAGE_H__
+#ifndef __CONSTANTS_H__
+#define __CONSTANTS_H__
 
-#include <stdint.h>
+#include <cstdint>
+#include <cstddef>
 
-#ifdef __cplusplus
-extern "C"
-{
-#endif
+constexpr uint64_t PAGE_SIZE = 0x1000;
+constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
+constexpr uint64_t PAGES_PER_EXTENT = (1 << 10);
+constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
+constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
+constexpr size_t LOCAL_CACHE_DEFAULT_MEGABYTES = 4096;
+constexpr size_t EXTENT_BUCKETS = (1 << 16);
+constexpr size_t SCRATCH_DESCRIPTORS = (1 << 6);
+constexpr int SYNC_INTERVAL_DEFAULT = 60;
+constexpr int APPROX_MAX_BACKGROUND_THREADS = 64;
 
-    void storage_init(const char *_blockdir);
-    void storage_deinit();
-    int storage_read(off_t offset, size_t size, uint8_t *bytes);
-    int storage_write(off_t offset, size_t size, const uint8_t *bytes);
+#define EXTENT_TEMPLATE "%s/%016lX.extent"
+#define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
+#define S3BD_KEEP_SCRATCH_FILE "S3BD_KEEP_SCRATCH_FILE"
+#define S3BD_LOCAL_CACHE_MEGABYTES "S3BD_LOCAL_CACHE_MEGABYTES"
+#define S3BD_SYNC_INTERVAL "S3BD_SYNC_INTERVAL"
 
-#ifdef __cplusplus
-}
-
-bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool should_report = true);
-bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes);
-void *storage_flush(void *arg);
-
-#endif
 #endif

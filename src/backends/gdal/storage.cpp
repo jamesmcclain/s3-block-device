@@ -30,12 +30,9 @@
 #include <cstring>
 
 #include <algorithm>
-#include <atomic>
 #include <functional>
 #include <map>
 #include <vector>
-
-#include <boost/compute/detail/lru_cache.hpp>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -48,16 +45,12 @@
 #include <pthread.h>
 
 #include "storage.h"
+#include "constants.h"
+#include "lru.h"
 #include "fullio.h"
 
 // Block directory name
 static const char *blockdir = nullptr;
-
-// LRU cache (used for managing eviction, not directly for caching)
-typedef boost::compute::detail::lru_cache<uint64_t, bool> lru_cache_t;
-static std::atomic<int> lru_cache_threads{0};
-static lru_cache_t lru_cache{0};
-static pthread_mutex_t lru_cache_lock;
 
 // Extent locking
 typedef struct
@@ -95,17 +88,6 @@ static int storage_sync_interval = SYNC_INTERVAL_DEFAULT;
 static bool reaper_thread_continue = false;
 static pthread_t reaper_thread;
 #endif
-
-// ------------------------------------------------------------------------
-
-static void cache_report_page(uint64_t page_tag)
-{
-    uint64_t extent_tag = page_tag & (~EXTENT_MASK);
-
-    pthread_mutex_lock(&lru_cache_lock);
-    lru_cache.insert(extent_tag, true);
-    pthread_mutex_unlock(&lru_cache_lock);
-}
 
 // ------------------------------------------------------------------------
 
@@ -310,6 +292,8 @@ static void release_scratch_handle(size_t handle)
 
 // ------------------------------------------------------------------------
 
+void *delayed_flush_extent(void *arg);
+
 /**
  * Initialize storage.
  *
@@ -351,8 +335,8 @@ void storage_init(const char *_blockdir)
 
     // LRU cache
     {
-        uint64_t local_cache_megabytes = LOCAL_CACHE_DEFAULT_MEGABYTES;
-        uint64_t local_cache_extents;
+        size_t local_cache_megabytes = LOCAL_CACHE_DEFAULT_MEGABYTES;
+        size_t local_cache_extents;
         const char *str;
 
         if ((str = getenv(S3BD_LOCAL_CACHE_MEGABYTES)) != nullptr)
@@ -360,9 +344,7 @@ void storage_init(const char *_blockdir)
             sscanf(str, "%lu", &local_cache_megabytes);
         }
         local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
-
-        lru_cache_lock = PTHREAD_MUTEX_INITIALIZER;
-        lru_cache = lru_cache_t(local_cache_extents);
+        lru_init(local_cache_extents, delayed_flush_extent);
     }
 
     // Start the storage flush thread
@@ -392,7 +374,7 @@ void storage_deinit()
     }
     locked_fd_vector.clear();
     extent_buckets.clear();
-    lru_cache.clear();
+    lru_deinit();
 }
 
 /**
@@ -529,7 +511,7 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
     // Note that the page has been touched
     if (should_report)
     {
-        cache_report_page(page_tag);
+        lru_report_page(page_tag);
     }
 
     // Acquire resources
@@ -640,7 +622,7 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
     // Note that the page has been touched
-    cache_report_page(page_tag);
+    lru_report_page(page_tag);
 
     // Acquire resources
     extent_spin_lock(extent_tag, true);
@@ -780,32 +762,10 @@ void *delayed_flush_extent(void *arg)
 {
     uint64_t tag = reinterpret_cast<uint64_t>(arg);
 
-    lru_cache_threads++;
+    lru_aquire_thread();
     sleep(1);
     flush_extent(tag, true);
-    lru_cache_threads--;
+    lru_release_thread();
     return nullptr;
 }
 
-/**
- * Specialization of the lru_cache_t::evict method.
- */
-template <>
-void lru_cache_t::evict()
-{
-    pthread_t thread;
-    uint64_t tag;
-
-    // evict item from the end of most recently used list
-    typename list_type::iterator i = --m_list.end();
-    tag = *i;
-    m_map.erase(*i);
-    m_list.erase(i);
-
-    while (lru_cache_threads >= APPROX_MAX_BACKGROUND_THREADS)
-    {
-        sleep(0);
-    }
-    pthread_create(&thread, NULL, delayed_flush_extent, reinterpret_cast<void *>(tag));
-    pthread_detach(thread);
-}
