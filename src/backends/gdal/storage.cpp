@@ -30,7 +30,6 @@
 #include <cstring>
 
 #include <algorithm>
-#include <functional>
 #include <vector>
 
 #include <sys/types.h>
@@ -47,19 +46,11 @@
 #include "storage.h"
 #include "lru.h"
 #include "extent.h"
+#include "scratch.h"
 #include "fullio.h"
 
 // Block directory name
 static const char *blockdir = nullptr;
-
-// Scratch file
-typedef struct
-{
-    pthread_mutex_t lock;
-    int fd;
-} locked_fd_t;
-typedef std::vector<locked_fd_t> locked_fd_vector_t;
-static locked_fd_vector_t locked_fd_vector;
 
 // Sync thread
 static bool sync_thread_continue = false;
@@ -78,49 +69,6 @@ static pthread_t reaper_thread;
 
 // ------------------------------------------------------------------------
 
-/**
- * Acquire a handle to a file descriptor for the scratch file.
- *
- * @return A handle that is mappable to a file descriptor.
- */
-static size_t aquire_scratch_handle()
-{
-    for (size_t i = 0; true; ++i)
-    {
-        size_t handle = i % SCRATCH_DESCRIPTORS;
-        pthread_mutex_t *lock = &(locked_fd_vector[handle].lock);
-
-        if (pthread_mutex_trylock(lock) == 0)
-        {
-            return handle;
-        }
-    }
-}
-
-/**
- * Translate a previously-acquired handle into file descriptor for the
- * scratch file.
- *
- * @param handle A previously-acquired handle
- */
-static int scratch_handle_to_fd(size_t handle)
-{
-    return locked_fd_vector[handle].fd;
-}
-
-/**
- * Release a scratch file handle.
- *
- * @param handle The handle to release
- */
-static void release_scratch_handle(size_t handle)
-{
-    pthread_mutex_t *lock = &(locked_fd_vector[handle].lock);
-    pthread_mutex_unlock(lock);
-}
-
-// ------------------------------------------------------------------------
-
 void *delayed_flush_extent(void *arg);
 
 /**
@@ -134,28 +82,8 @@ void storage_init(const char *_blockdir)
     // Note blockdir
     blockdir = _blockdir;
 
-    // Extent locking
     extent_init();
-
-    // Scratch file
-    {
-        char scratch_filename[0x100];
-
-        // Initialize file descriptor list
-        sprintf(scratch_filename, SCRATCH_TEMPLATE, getpid());
-        for (size_t i = 0; i < SCRATCH_DESCRIPTORS; ++i)
-        {
-            locked_fd_vector.push_back(locked_fd_t{
-                PTHREAD_MUTEX_INITIALIZER,
-                open(scratch_filename, O_RDWR | O_CREAT, S_IRWXU)});
-        }
-
-        // Unlink scratch file if not told to keep it
-        if (getenv(S3BD_KEEP_SCRATCH_FILE) == nullptr)
-        {
-            unlink(scratch_filename);
-        }
-    }
+    scratch_init();
 
     // LRU cache
     {
@@ -192,12 +120,8 @@ void storage_deinit()
     sync_thread_continue = false;
     pthread_join(sync_thread, nullptr);
 
-    for (size_t i = 0; i < SCRATCH_DESCRIPTORS; ++i)
-    {
-        close(locked_fd_vector[i].fd);
-    }
-    locked_fd_vector.clear();
     extent_deinit();
+    scratch_deinit();
     lru_deinit();
 }
 

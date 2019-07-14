@@ -17,10 +17,10 @@ all: libs3bd_gdal.so unit_tests
 callbacks.o: callbacks.c ../backend.h
 	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 $< -fPIC -c -o $@
 
-libs3bd_gdal.so: callbacks.o fullio.o storage.o lru.o extent.o
+libs3bd_gdal.so: callbacks.o fullio.o storage.o lru.o extent.o scratch.o
 	$(CC) $(CFLAGS) $^ `pkg-config gdal --libs` -lpthread -lstdc++ -shared -o $@
 
-unit_tests: unit_tests.o fullio.o storage.o lru.o extent.o
+unit_tests: unit_tests.o fullio.o storage.o lru.o extent.o scratch.o
 	$(CC) $(CFLAGS) $^ -lm `pkg-config gdal --libs` -lpthread -lstdc++ -o $@
 
 clean:
