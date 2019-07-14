@@ -88,6 +88,7 @@ static locked_fd_vector_t locked_fd_vector;
 // Sync thread
 static bool sync_thread_continue = false;
 static pthread_t sync_thread;
+static int storage_sync_interval = SYNC_INTERVAL_DEFAULT;
 
 #if 0
 // Extent entry reaper thread
@@ -350,17 +351,13 @@ void storage_init(const char *_blockdir)
 
     // LRU cache
     {
-        uint64_t local_cache_megabytes;
+        uint64_t local_cache_megabytes = LOCAL_CACHE_DEFAULT_MEGABYTES;
         uint64_t local_cache_extents;
         const char *str;
 
         if ((str = getenv(S3BD_LOCAL_CACHE_MEGABYTES)) != nullptr)
         {
             sscanf(str, "%lu", &local_cache_megabytes);
-        }
-        else
-        {
-            local_cache_megabytes = LOCAL_CACHE_DEFAULT_MEGABYTES;
         }
         local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
 
@@ -369,8 +366,16 @@ void storage_init(const char *_blockdir)
     }
 
     // Start the storage flush thread
-    sync_thread_continue = true;
-    pthread_create(&sync_thread, NULL, storage_flush, nullptr);
+    {
+        const char *str;
+
+        if ((str = getenv(S3BD_SYNC_INTERVAL)) != nullptr)
+        {
+            sscanf(str, "%d", &storage_sync_interval);
+        }
+        sync_thread_continue = true;
+        pthread_create(&sync_thread, NULL, storage_flush, nullptr);
+    }
 }
 
 /**
@@ -485,7 +490,7 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
 }
 
 /**
- * Synchronously flush all pages to storage.
+ * Synchronously flush all dirty pages to storage.
  *
  * @return nullptr
  */
@@ -501,7 +506,7 @@ void *storage_flush(void *arg)
         }
         else
         {
-            sleep(1);
+            sleep(storage_sync_interval);
         }
     }
     return nullptr;
@@ -799,6 +804,7 @@ void lru_cache_t::evict()
 
     while (lru_cache_threads >= APPROX_MAX_BACKGROUND_THREADS)
     {
+        sleep(0);
     }
     pthread_create(&thread, NULL, delayed_flush_extent, reinterpret_cast<void *>(tag));
     pthread_detach(thread);

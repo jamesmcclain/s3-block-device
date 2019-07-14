@@ -3,10 +3,13 @@ BOOST_ROOT ?= /usr/include
 
 
 all: libs3bd_gdal.so unit_tests
-	unit_tests
+	S3BD_SYNC_INTERVAL=0 unit_tests
 
 %.o: %.c %.h
 	$(CC) $(CFLAGS) $< -fPIC -c -o $@
+
+%.o: %.cpp %.h
+	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC `pkg-config gdal --cflags` `pkg-config fuse --cflags` -c -o $@
 
 %.o: %.cpp
 	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC `pkg-config gdal --cflags` `pkg-config fuse --cflags` -c -o $@
