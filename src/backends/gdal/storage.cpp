@@ -57,13 +57,38 @@ typedef struct
 
 typedef std::queue<flush_queue_entry_t> flush_queue_t;
 
-static flush_queue_t flush_queue;
-static pthread_mutex_t flush_queue_lock;
+static flush_queue_t *flush_queue = nullptr;
+static pthread_mutex_t flush_queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static const char *blockdir = nullptr;
 
 void *eviction_queue(void *arg);
 void *continuous_queue(void *arg);
 void *unqueue(void *arg);
+
+/**
+ * Initialize the flush queue.
+ */
+void queue_init()
+{
+    if (flush_queue == nullptr)
+    {
+        flush_queue = new flush_queue_t{};
+    }
+}
+
+/**
+ * Deinitialize the flush queue.
+ */
+void queue_deinit()
+{
+    pthread_mutex_lock(&flush_queue_lock);
+    if (flush_queue != nullptr)
+    {
+        delete flush_queue;
+        flush_queue = nullptr;
+    }
+    flush_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+}
 
 /**
  * Initialize storage.
@@ -73,10 +98,11 @@ void *unqueue(void *arg);
 void storage_init(const char *_blockdir)
 {
     blockdir = _blockdir;
+    queue_init();
     extent_init();
     scratch_init();
-    sync_init(continuous_queue, unqueue);
     lru_init(eviction_queue);
+    sync_init(continuous_queue, unqueue);
 }
 
 /**
@@ -84,10 +110,11 @@ void storage_init(const char *_blockdir)
  */
 void storage_deinit()
 {
-    lru_deinit();
     sync_deinit();
+    lru_deinit();
     scratch_deinit();
     extent_deinit();
+    queue_deinit();
     blockdir = nullptr;
 }
 
@@ -450,7 +477,7 @@ void *eviction_queue(void *arg)
     uint64_t tag = reinterpret_cast<uint64_t>(arg);
 
     pthread_mutex_lock(&flush_queue_lock);
-    flush_queue.push(flush_queue_entry_t{tag, true});
+    flush_queue->push(flush_queue_entry_t{tag, true});
     pthread_mutex_unlock(&flush_queue_lock);
     return nullptr;
 }
@@ -470,7 +497,7 @@ void *continuous_queue(void *arg)
         if (extent_first_dirty_unreferenced(&extent_tag))
         {
             pthread_mutex_lock(&flush_queue_lock);
-            flush_queue.push(flush_queue_entry_t{extent_tag, false});
+            flush_queue->push(flush_queue_entry_t{extent_tag, false});
             pthread_mutex_unlock(&flush_queue_lock);
         }
         else
@@ -486,9 +513,9 @@ void *unqueue(void *arg)
     while (sync_thread_continue)
     {
         pthread_mutex_lock(&flush_queue_lock);
-        if (!flush_queue.empty())
+        if (!flush_queue->empty())
         {
-            auto const &entry = flush_queue.front();
+            auto const &entry = flush_queue->front();
             auto tag = entry.tag;
             auto should_remove = entry.should_remove;
             flush_queue->pop();
