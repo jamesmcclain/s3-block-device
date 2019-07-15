@@ -39,30 +39,31 @@
 
 #include <pthread.h>
 
+#include <queue>
+
 #include "constants.h"
 #include "storage.h"
 #include "lru.h"
 #include "extent.h"
 #include "scratch.h"
+#include "sync.h"
 #include "fullio.h"
 
-// Block directory name
+typedef struct
+{
+    uint64_t tag;
+    bool should_remove;
+} flush_queue_entry_t;
+
+typedef std::queue<flush_queue_entry_t> flush_queue_t;
+
+static flush_queue_t flush_queue;
+static pthread_mutex_t flush_queue_lock;
 static const char *blockdir = nullptr;
 
-#if 0
-// Extent entry reaper thread
-static bool reaper_thread_continue = false;
-static pthread_t reaper_thread;
-#endif
-
-// ------------------------------------------------------------------------
-
-// XXX clean extent entry reaper thread
-
-// ------------------------------------------------------------------------
-
-void *delayed_flush_extent(void *arg);
-void *continuous_flush_extent(void *arg);
+void *eviction_queue(void *arg);
+void *continuous_queue(void *arg);
+void *unqueue(void *arg);
 
 /**
  * Initialize storage.
@@ -74,7 +75,8 @@ void storage_init(const char *_blockdir)
     blockdir = _blockdir;
     extent_init();
     scratch_init();
-    lru_init(delayed_flush_extent, continuous_flush_extent);
+    sync_init(continuous_queue, unqueue);
+    lru_init(eviction_queue);
 }
 
 /**
@@ -83,24 +85,22 @@ void storage_init(const char *_blockdir)
 void storage_deinit()
 {
     lru_deinit();
+    sync_deinit();
     scratch_deinit();
     extent_deinit();
     blockdir = nullptr;
 }
 
 /**
- * Flush an extent to storage.  Only one instance of this function
- * should ever be active at once.
+ * Flush an extent to storage.
  *
  * @param page_tag The tag whose entire extent should be flushed
  * @param should_remove Whether or not to remove the extent from the local cache
  * @return Boolean indicating success or failure
  */
-bool flush_extent(uint64_t extent_tag, bool should_remove = false)
+bool storage_flush(uint64_t extent_tag, bool should_remove = false)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
-
-    uint8_t *extent_array = new uint8_t[EXTENT_SIZE];
 
     // If the extent is clean, leave quickly (possibly punching a hole if needed)
     extent_spin_lock(extent_tag, true);
@@ -120,6 +120,8 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
         return true;
     }
     extent_unlock(extent_tag, true, false);
+
+    uint8_t *extent_array = new uint8_t[EXTENT_SIZE];
 
     // Bring contents of all pages into "extent_array"
     for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
@@ -438,22 +440,18 @@ extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
 // ------------------------------------------------------------------------
 
 /**
- * Flush the given extent after a short delay.  The delay is to
- * prevent thrashing if there is cache pressure and, for example, a
- * page has been read as part of getting a complete extent to perform
- * an extent write as part of an eviction.
+ * Flush an evicted extent.
  *
  * @param arg The tag of the extent to flush
  * @return Always nullptr
  */
-void *delayed_flush_extent(void *arg)
+void *eviction_queue(void *arg)
 {
     uint64_t tag = reinterpret_cast<uint64_t>(arg);
 
-    lru_aquire_thread();
-    sleep(1);
-    flush_extent(tag, true);
-    lru_release_thread();
+    pthread_mutex_lock(&flush_queue_lock);
+    flush_queue.push(flush_queue_entry_t{tag, true});
+    pthread_mutex_unlock(&flush_queue_lock);
     return nullptr;
 }
 
@@ -463,19 +461,48 @@ void *delayed_flush_extent(void *arg)
  * @param arg Unused
  * @return Always nullptr
  */
-void *continuous_flush_extent(void *arg)
+void *continuous_queue(void *arg)
 {
     while (sync_thread_continue)
     {
         uint64_t extent_tag;
 
-        if (extent_first_dirty_and_unreferenced(&extent_tag))
+        if (extent_first_dirty_unreferenced(&extent_tag))
         {
-            flush_extent(extent_tag);
+            pthread_mutex_lock(&flush_queue_lock);
+            flush_queue.push(flush_queue_entry_t{extent_tag, false});
+            pthread_mutex_unlock(&flush_queue_lock);
         }
         else
         {
-            sleep(sync_thread_interval);
+            sleep(1);
+        }
+    }
+    return nullptr;
+}
+
+void *unqueue(void *arg)
+{
+    while (sync_thread_continue)
+    {
+        bool should_sleep = false;
+
+        pthread_mutex_lock(&flush_queue_lock);
+        if (!flush_queue.empty())
+        {
+            auto const &entry = flush_queue.front();
+            fprintf(stderr, "XXX %ld\n", flush_queue.size());
+            storage_flush(entry.tag, entry.should_remove);
+            flush_queue.pop();
+        }
+        else
+        {
+            should_sleep = true;
+        }
+        pthread_mutex_unlock(&flush_queue_lock);
+        if (should_sleep)
+        {
+            sleep(0);
         }
     }
     return nullptr;

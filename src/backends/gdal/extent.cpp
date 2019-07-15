@@ -208,7 +208,14 @@ bool extent_clean(uint64_t extent_tag)
     return !(extent_dirty(extent_tag));
 }
 
-bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag)
+/**
+ * Return the tag of the first dirty, unreferenced extent through the
+ * pointer.
+ *
+ * @param extent_tag The return pointer
+ * @return A boolean indicating whether an extent was found
+ */
+bool extent_first_dirty_unreferenced(uint64_t *extent_tag)
 {
     for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
     {
@@ -223,6 +230,18 @@ bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag)
                 pthread_mutex_unlock(&bucket.lock);
                 *extent_tag = retval;
                 return true;
+            }
+            else if (false && !itr->second.dirty && itr->second.refcount == 0) // XXX
+            {
+                // From
+                // http://www.cplusplus.com/reference/map/map/erase/:
+                // Iterators, pointers and references referring to
+                // elements removed by the function are invalidated.
+                // All other iterators, pointers and references keep
+                // their validity.
+                auto old_itr = itr;
+                bucket.entries.erase(old_itr);
+                itr++;
             }
         }
         pthread_mutex_unlock(&bucket.lock);

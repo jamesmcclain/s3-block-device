@@ -22,14 +22,12 @@
  * THE SOFTWARE.
  */
 
-#ifndef __LRU_H__
-#define __LRU_H__
+#ifndef __SYNC_H__
+#define __SYNC_H__
 
-#include <cstddef>
-#include <cstdint>
+extern bool sync_thread_continue;
 
-void lru_init(void *(*f)(void *));
-void lru_deinit();
-void lru_report_page(uint64_t page_tag);
+void sync_init(void *(*f)(void *), void *(*g)(void *));
+void sync_deinit();
 
 #endif

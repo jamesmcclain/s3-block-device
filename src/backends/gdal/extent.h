@@ -34,6 +34,6 @@ void extent_spin_lock(uint64_t extent_tag, bool wrlock);
 void extent_unlock(uint64_t extent_tag, bool wrlock, bool mark_clean);
 bool extent_dirty(uint64_t extent_tag);
 bool extent_clean(uint64_t extent_tag);
-bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag);
+bool extent_first_dirty_unreferenced(uint64_t *extent_tag);
 
 #endif

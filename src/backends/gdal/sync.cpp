@@ -22,14 +22,37 @@
  * THE SOFTWARE.
  */
 
-#ifndef __LRU_H__
-#define __LRU_H__
+#include <cstdio>
+#include <cstdlib>
 
-#include <cstddef>
-#include <cstdint>
+#include <unistd.h>
+#include <pthread.h>
 
-void lru_init(void *(*f)(void *));
-void lru_deinit();
-void lru_report_page(uint64_t page_tag);
+#include "constants.h"
+#include "sync.h"
 
-#endif
+static pthread_t sync_thread;
+static pthread_t unqueue_thread;
+bool sync_thread_continue = false;
+
+/**
+ * Initialize the syncing threads.
+ *
+ * @param size The maximuim number of cache entries.
+ */
+void sync_init(void *(*f)(void *), void *(*g)(void *))
+{
+    sync_thread_continue = true;
+    pthread_create(&sync_thread, NULL, f, nullptr);
+    pthread_create(&unqueue_thread, NULL, g, nullptr);
+}
+
+/**
+ * Deinitialize the syncing threads.
+ */
+void sync_deinit()
+{
+    sync_thread_continue = false;
+    pthread_join(sync_thread, nullptr);
+    pthread_join(unqueue_thread, nullptr);
+}
