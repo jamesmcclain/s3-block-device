@@ -39,7 +39,7 @@
 
 #include <pthread.h>
 
-#include <queue>
+#include <set>
 
 #include "constants.h"
 #include "storage.h"
@@ -49,13 +49,18 @@
 #include "sync.h"
 #include "fullio.h"
 
-typedef struct
+struct flush_queue_entry_t
 {
     uint64_t tag;
     bool should_remove;
-} flush_queue_entry_t;
 
-typedef std::queue<flush_queue_entry_t> flush_queue_t;
+    bool operator<(const flush_queue_entry_t &rhs) const
+    {
+        return (should_remove > rhs.should_remove) || (tag > rhs.tag);
+    }
+};
+
+typedef std::set<flush_queue_entry_t> flush_queue_t;
 
 static flush_queue_t *flush_queue = nullptr;
 static pthread_mutex_t flush_queue_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -466,6 +471,13 @@ extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
 
 // ------------------------------------------------------------------------
 
+void flush_queue_insert(uint64_t tag, bool should_remove)
+{
+    pthread_mutex_lock(&flush_queue_lock);
+    flush_queue->insert(flush_queue_entry_t{tag, should_remove});
+    pthread_mutex_unlock(&flush_queue_lock);
+}
+
 /**
  * Flush an evicted extent.
  *
@@ -476,9 +488,7 @@ void *eviction_queue(void *arg)
 {
     uint64_t tag = reinterpret_cast<uint64_t>(arg);
 
-    pthread_mutex_lock(&flush_queue_lock);
-    flush_queue->push(flush_queue_entry_t{tag, true});
-    pthread_mutex_unlock(&flush_queue_lock);
+    flush_queue_insert(tag, true);
     return nullptr;
 }
 
@@ -496,9 +506,7 @@ void *continuous_queue(void *arg)
 
         if (extent_first_dirty_unreferenced(&extent_tag))
         {
-            pthread_mutex_lock(&flush_queue_lock);
-            flush_queue->push(flush_queue_entry_t{extent_tag, false});
-            pthread_mutex_unlock(&flush_queue_lock);
+            flush_queue_insert(extent_tag, false);
         }
         else
         {
@@ -515,10 +523,11 @@ void *unqueue(void *arg)
         pthread_mutex_lock(&flush_queue_lock);
         if (!flush_queue->empty())
         {
-            auto const &entry = flush_queue->front();
-            auto tag = entry.tag;
-            auto should_remove = entry.should_remove;
-            flush_queue->pop();
+            auto itr = flush_queue->cbegin();
+            auto tag = itr->tag;
+            auto should_remove = itr->should_remove;
+            fprintf(stderr, "XXX %ld %lu %d\n", flush_queue->size(), tag, should_remove);
+            flush_queue->erase(itr);
             pthread_mutex_unlock(&flush_queue_lock);
             storage_flush(tag, should_remove);
         }

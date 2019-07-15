@@ -27,6 +27,7 @@
 
 #include <pthread.h>
 
+#include <atomic>
 #include <map>
 #include <functional>
 #include <vector>
@@ -54,6 +55,8 @@ typedef std::hash<uint64_t> extent_bucket_hash_t;
 
 static extent_bucket_hash_t extent_bucket_hash = extent_bucket_hash_t{};
 static extent_buckets_t extent_buckets = extent_buckets_t{};
+
+static std::atomic<size_t> moop{0};
 
 /**
  * Initialize extent tracking.
@@ -217,9 +220,10 @@ bool extent_clean(uint64_t extent_tag)
  */
 bool extent_first_dirty_unreferenced(uint64_t *extent_tag)
 {
+    moop++;
     for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
     {
-        auto &bucket = extent_buckets[i];
+        auto &bucket = extent_buckets[(i + moop) % EXTENT_BUCKETS];
 
         pthread_mutex_lock(&bucket.lock);
         for (auto itr = bucket.entries.begin(); itr != bucket.entries.end(); ++itr)
@@ -231,7 +235,7 @@ bool extent_first_dirty_unreferenced(uint64_t *extent_tag)
                 *extent_tag = retval;
                 return true;
             }
-            else if (false && !itr->second.dirty && itr->second.refcount == 0) // XXX
+            else if (!itr->second.dirty && itr->second.refcount == 0) // XXX
             {
                 // From
                 // http://www.cplusplus.com/reference/map/map/erase/:
@@ -240,8 +244,9 @@ bool extent_first_dirty_unreferenced(uint64_t *extent_tag)
                 // All other iterators, pointers and references keep
                 // their validity.
                 auto old_itr = itr;
-                bucket.entries.erase(old_itr);
                 itr++;
+                itr++;
+                bucket.entries.erase(old_itr);
             }
         }
         pthread_mutex_unlock(&bucket.lock);
