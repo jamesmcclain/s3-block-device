@@ -475,7 +475,7 @@ void *continuous_queue(void *arg)
         }
         else
         {
-            sleep(1);
+            sleep(0);
         }
     }
     return nullptr;
@@ -485,23 +485,19 @@ void *unqueue(void *arg)
 {
     while (sync_thread_continue)
     {
-        bool should_sleep = false;
-
         pthread_mutex_lock(&flush_queue_lock);
         if (!flush_queue.empty())
         {
             auto const &entry = flush_queue.front();
-            fprintf(stderr, "XXX %ld\n", flush_queue.size());
-            storage_flush(entry.tag, entry.should_remove);
-            flush_queue.pop();
+            auto tag = entry.tag;
+            auto should_remove = entry.should_remove;
+            flush_queue->pop();
+            pthread_mutex_unlock(&flush_queue_lock);
+            storage_flush(tag, should_remove);
         }
         else
         {
-            should_sleep = true;
-        }
-        pthread_mutex_unlock(&flush_queue_lock);
-        if (should_sleep)
-        {
+            pthread_mutex_unlock(&flush_queue_lock);
             sleep(0);
         }
     }
