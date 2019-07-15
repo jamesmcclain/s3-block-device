@@ -38,8 +38,10 @@ constexpr size_t EXTENT_BUCKETS = (1 << 16);
 constexpr size_t SCRATCH_DESCRIPTORS = (1 << 6);
 
 #define EXTENT_TEMPLATE "%s/%016lX.extent"
-#define SCRATCH_TEMPLATE "/tmp/s3bd.%d"
+#define SCRATCH_TEMPLATE "%s/s3bd.%d"
+#define SCRATCH_DEFAULT_DIR "/tmp"
 #define S3BD_KEEP_SCRATCH_FILE "S3BD_KEEP_SCRATCH_FILE"
 #define S3BD_LOCAL_CACHE_MEGABYTES "S3BD_LOCAL_CACHE_MEGABYTES"
+#define S3BD_SCRATCH_DIR "S3BD_SCRATCH_DIR"
 
 #endif
