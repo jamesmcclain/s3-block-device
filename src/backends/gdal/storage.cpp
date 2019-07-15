@@ -510,7 +510,7 @@ void *continuous_queue(void *arg)
         }
         else
         {
-            sleep(0);
+            sleep(1);
         }
     }
     return nullptr;
@@ -526,7 +526,6 @@ void *unqueue(void *arg)
             auto itr = flush_queue->cbegin();
             auto tag = itr->tag;
             auto should_remove = itr->should_remove;
-            fprintf(stderr, "XXX %ld %lu %d\n", flush_queue->size(), tag, should_remove);
             flush_queue->erase(itr);
             pthread_mutex_unlock(&flush_queue_lock);
             storage_flush(tag, should_remove);
@@ -534,7 +533,7 @@ void *unqueue(void *arg)
         else
         {
             pthread_mutex_unlock(&flush_queue_lock);
-            sleep(0);
+            sleep(1);
         }
     }
     return nullptr;

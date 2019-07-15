@@ -34,7 +34,7 @@
 
 typedef boost::compute::detail::lru_cache<uint64_t, bool> lru_cache_t;
 
-static lru_cache_t lru_cache{0};
+static lru_cache_t *lru_cache = nullptr;
 static pthread_mutex_t lru_cache_lock;
 
 static void *(*lru_flusher)(void *) = nullptr;
@@ -74,7 +74,10 @@ void lru_init(void *(*f)(void *))
     }
     local_cache_extents = (local_cache_megabytes * (1 << 20)) / EXTENT_SIZE;
     lru_cache_lock = PTHREAD_MUTEX_INITIALIZER;
-    lru_cache = lru_cache_t{local_cache_extents};
+    if (lru_cache == nullptr)
+    {
+        lru_cache = new lru_cache_t{local_cache_extents};
+    }
 }
 
 /**
@@ -82,7 +85,11 @@ void lru_init(void *(*f)(void *))
  */
 void lru_deinit()
 {
-    lru_cache.clear();
+    if (lru_cache != nullptr)
+    {
+        delete lru_cache;
+        lru_cache = nullptr;
+    }
 }
 
 /**
@@ -95,6 +102,6 @@ void lru_report_page(uint64_t page_tag)
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
     pthread_mutex_lock(&lru_cache_lock);
-    lru_cache.insert(extent_tag, true);
+    lru_cache->insert(extent_tag, true);
     pthread_mutex_unlock(&lru_cache_lock);
 }
