@@ -141,12 +141,32 @@ bool extent_lock(uint64_t extent_tag, bool wrlock)
     }
 }
 
-void extent_spin_lock(uint64_t extent_tag, bool wrlock)
+void extent_spinlock(uint64_t extent_tag, bool wrlock)
 {
     while (!extent_lock(extent_tag, wrlock))
     {
         sleep(0);
     }
+}
+
+/**
+ * Downgrade a write lock to a read lock.
+ *
+ * @param extent_tag The tag of the extent
+ */
+void extent_lock_downgrade(uint64_t extent_tag)
+{
+    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
+
+    auto index = extent_bucket_hash(extent_tag) % extent_buckets->size();
+    auto &bucket = extent_buckets->operator[](index);
+
+    pthread_mutex_lock(&bucket.lock);
+    auto itr = bucket.entries.find(extent_tag);
+    assert(itr != bucket.entries.end());
+    assert(itr->second.refcount == -1);
+    itr->second.refcount = 1;
+    pthread_mutex_unlock(&bucket.lock);
 }
 
 /**

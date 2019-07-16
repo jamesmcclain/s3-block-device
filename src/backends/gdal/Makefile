@@ -3,7 +3,7 @@ BOOST_ROOT ?= /usr/include
 
 
 all: libs3bd_gdal.so unit_tests
-	S3BD_SYNC_INTERVAL=0 unit_tests
+	unit_tests
 
 %.o: %.c %.h
 	$(CC) $(CFLAGS) $< -fPIC -c -o $@
