@@ -128,15 +128,13 @@ void storage_deinit()
  * assumed to already have a write lock on the extent.
  *
  * @param extent_tag The extent to read
+ * @param page_tag The page to seek to
+ * @param fd The file descriptor to use
  * @return A boolean indicating whether the extent is now present
  */
-bool storage_unflush(uint64_t extent_tag)
+bool storage_unflush(uint64_t extent_tag, uint64_t page_tag, int fd)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
-
-    // Acquire resources
-    auto scratch_handle = aquire_scratch_handle();
-    int fd = scratch_handle_to_fd(scratch_handle);
 
     // The extent should be either completely absent, or completely
     // present.  If a hole is found in the extent, then assume it to
@@ -160,7 +158,6 @@ bool storage_unflush(uint64_t extent_tag)
                 {
                     free(extent_array);
                     VSIFCloseL(handle);
-                    release_scratch_handle(scratch_handle);
                     return false;
                 }
             }
@@ -175,20 +172,17 @@ bool storage_unflush(uint64_t extent_tag)
         else
         {
             free(extent_array);
-            release_scratch_handle(scratch_handle);
             return false;
         }
 
-        // Bytes written to scratch file, so free resources and report
-        // success
+        // Bytes written to scratch file, so free resources and try to
+        // seek to the original offset
         free(extent_array);
-        release_scratch_handle(scratch_handle);
-        return true;
+        return (lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag));
     }
     else
     {
         // Nothing to do, so free resources and report success
-        release_scratch_handle(scratch_handle);
         return true;
     }
 }
@@ -305,27 +299,19 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
     // Note that the page has been touched
     if (should_report)
     {
-        lru_report_page(page_tag);
+        lru_report_extent(extent_tag);
     }
 
-    // Get a write lock
+    // Acquire resources
     extent_spinlock(extent_tag, true);
-
-    // Ensure that the extent is in the scratch file
-    if (!storage_unflush(extent_tag))
-    {
-        extent_unlock(extent_tag, true, false);
-        return false;
-    }
-
-    // Downgrade the write lock to a read lock
-    extent_lock_downgrade(extent_tag);
-
-    // Read the bytes
     auto scratch_handle = aquire_scratch_handle();
     int fd = scratch_handle_to_fd(scratch_handle);
-    if (lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag))
+
+    // Read the bytes
+    if ((lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) ||
+        storage_unflush(extent_tag, page_tag, fd))
     {
+        extent_lock_downgrade(extent_tag); // ?
         fullread(fd, bytes, size);
         release_scratch_handle(scratch_handle);
         extent_unlock(extent_tag, false, false);
@@ -334,7 +320,7 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
     else
     {
         release_scratch_handle(scratch_handle);
-        extent_unlock(extent_tag, false, false);
+        extent_unlock(extent_tag, true, false);
         return false;
     }
 }
@@ -354,22 +340,16 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
     // Note that the page has been touched
-    lru_report_page(page_tag);
+    lru_report_extent(extent_tag);
 
-    // Get a write lock
+    // Acquire resources
     extent_spinlock(extent_tag, true);
-
-    // Ensure that the extent is in the scratch file
-    if (!storage_unflush(extent_tag))
-    {
-        extent_unlock(extent_tag, true, false);
-        return false;
-    }
-
-    // Write the bytes
     auto scratch_handle = aquire_scratch_handle();
     int fd = scratch_handle_to_fd(scratch_handle);
-    if (lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag))
+
+    // Write the bytes
+    if ((lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) ||
+        storage_unflush(extent_tag, page_tag, fd))
     {
         fullwrite(fd, bytes, PAGE_SIZE);
         release_scratch_handle(scratch_handle);

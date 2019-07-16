@@ -97,9 +97,9 @@ void lru_deinit()
  *
  * @param page_tag The page to report
  */
-void lru_report_page(uint64_t page_tag)
+void lru_report_extent(uint64_t extent_tag)
 {
-    uint64_t extent_tag = page_tag & (~EXTENT_MASK);
+    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
 
     pthread_mutex_lock(&lru_cache_lock);
     lru_cache->insert(extent_tag, true);

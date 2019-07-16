@@ -30,6 +30,6 @@
 
 void lru_init(void *(*f)(void *));
 void lru_deinit();
-void lru_report_page(uint64_t page_tag);
+void lru_report_extent(uint64_t extent_tag);
 
 #endif
