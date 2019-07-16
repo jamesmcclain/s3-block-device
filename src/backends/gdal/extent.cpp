@@ -222,9 +222,7 @@ bool extent_dirty(uint64_t extent_tag)
     auto &bucket = extent_buckets->operator[](index);
     auto itr = bucket.entries.find(extent_tag);
 
-    assert(itr != bucket.entries.end());
-
-    return itr->second.dirty;
+    return ((itr != bucket.entries.end()) && (itr->second.dirty));
 }
 
 /**
