@@ -22,19 +22,37 @@
  * THE SOFTWARE.
  */
 
-#ifndef __EXTENT_H__
-#define __EXTENT_H__
+#include <cstdio>
+#include <cstdlib>
 
-#include <cstdint>
+#include <unistd.h>
+#include <pthread.h>
 
-void extent_init();
-void extent_deinit();
-bool extent_lock(uint64_t extent_tag, bool wrlock);
-void extent_spinlock(uint64_t extent_tag, bool wrlock);
-void extent_lock_downgrade(uint64_t extent_tag);
-void extent_unlock(uint64_t extent_tag, bool wrlock, bool mark_clean);
-bool extent_dirty(uint64_t extent_tag);
-bool extent_clean(uint64_t extent_tag);
-bool extent_first_dirty_unreferenced(uint64_t *extent_tag);
+#include "constants.h"
+#include "sync.h"
 
-#endif
+static pthread_t sync_thread;
+static pthread_t unqueue_thread;
+bool sync_thread_continue = false;
+
+/**
+ * Initialize the syncing threads.
+ *
+ * @param size The maximuim number of cache entries.
+ */
+void sync_init(void *(*f)(void *), void *(*g)(void *))
+{
+    sync_thread_continue = true;
+    pthread_create(&sync_thread, NULL, f, nullptr);
+    pthread_create(&unqueue_thread, NULL, g, nullptr);
+}
+
+/**
+ * Deinitialize the syncing threads.
+ */
+void sync_deinit()
+{
+    sync_thread_continue = false;
+    pthread_join(sync_thread, nullptr);
+    pthread_join(unqueue_thread, nullptr);
+}

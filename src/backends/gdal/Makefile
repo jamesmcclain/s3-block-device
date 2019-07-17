@@ -3,24 +3,30 @@ BOOST_ROOT ?= /usr/include
 
 
 all: libs3bd_gdal.so unit_tests
-	S3BD_SYNC_INTERVAL=0 unit_tests
+	unit_tests
 
 %.o: %.c %.h
 	$(CC) $(CFLAGS) $< -fPIC -c -o $@
 
-%.o: %.cpp %.h
+storage.o: storage.cpp storage.h constants.h
 	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC `pkg-config gdal --cflags` `pkg-config fuse --cflags` -c -o $@
 
-%.o: %.cpp
+unit_tests.o: unit_tests.cpp constants.h
 	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC `pkg-config gdal --cflags` `pkg-config fuse --cflags` -c -o $@
+
+%.o: %.cpp %.h constants.h
+	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC -c -o $@
+
+%.o: %.cpp constants.h
+	$(CXX) $(CFLAGS) $(CXXFLAGS) -I$(BOOST_ROOT) $< -fPIC -c -o $@
 
 callbacks.o: callbacks.c ../backend.h
 	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 $< -fPIC -c -o $@
 
-libs3bd_gdal.so: callbacks.o fullio.o storage.o lru.o extent.o scratch.o
+libs3bd_gdal.so: callbacks.o fullio.o storage.o lru.o extent.o scratch.o sync.o
 	$(CC) $(CFLAGS) $^ `pkg-config gdal --libs` -lpthread -lstdc++ -shared -o $@
 
-unit_tests: unit_tests.o fullio.o storage.o lru.o extent.o scratch.o
+unit_tests: unit_tests.o fullio.o storage.o lru.o extent.o scratch.o sync.o
 	$(CC) $(CFLAGS) $^ -lm `pkg-config gdal --libs` -lpthread -lstdc++ -o $@
 
 clean:

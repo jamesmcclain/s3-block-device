@@ -44,22 +44,35 @@ typedef struct
 
 typedef std::vector<locked_fd_t> locked_fd_vector_t;
 
-static locked_fd_vector_t locked_fd_vector;
+static locked_fd_vector_t *locked_fd_vector = nullptr;
 
 /**
  * Initialize scratch file functionality.
  */
 void scratch_init()
 {
+    char *scratch_dir = nullptr;
     char scratch_filename[0x100];
 
     // Initialize file descriptor list
-    sprintf(scratch_filename, SCRATCH_TEMPLATE, getpid());
-    for (size_t i = 0; i < SCRATCH_DESCRIPTORS; ++i)
+    scratch_dir = getenv(S3BD_SCRATCH_DIR);
+    if (scratch_dir != nullptr)
     {
-        locked_fd_vector.push_back(locked_fd_t{
-            PTHREAD_MUTEX_INITIALIZER,
-            open(scratch_filename, O_RDWR | O_CREAT, S_IRWXU)});
+        sprintf(scratch_filename, SCRATCH_TEMPLATE, scratch_dir, getpid());
+    }
+    else
+    {
+        sprintf(scratch_filename, SCRATCH_TEMPLATE, SCRATCH_DEFAULT_DIR, getpid());
+    }
+    if (locked_fd_vector == nullptr)
+    {
+        locked_fd_vector = new locked_fd_vector_t{};
+        for (size_t i = 0; i < SCRATCH_DESCRIPTORS; ++i)
+        {
+            locked_fd_vector->push_back(locked_fd_t{
+                PTHREAD_MUTEX_INITIALIZER,
+                open(scratch_filename, O_RDWR | O_CREAT, S_IRWXU)});
+        }
     }
 
     // Unlink scratch file if not told to keep it
@@ -74,11 +87,15 @@ void scratch_init()
  */
 void scratch_deinit()
 {
-    for (size_t i = 0; i < SCRATCH_DESCRIPTORS; ++i)
+    if (locked_fd_vector != nullptr)
     {
-        close(locked_fd_vector[i].fd);
+        for (size_t i = 0; i < SCRATCH_DESCRIPTORS; ++i)
+        {
+            close(locked_fd_vector->operator[](i).fd);
+        }
+        delete locked_fd_vector;
+        locked_fd_vector = nullptr;
     }
-    locked_fd_vector.clear();
 }
 
 /**
@@ -91,7 +108,7 @@ size_t aquire_scratch_handle()
     for (size_t i = 0; true; ++i)
     {
         size_t handle = i % SCRATCH_DESCRIPTORS;
-        pthread_mutex_t *lock = &(locked_fd_vector[handle].lock);
+        pthread_mutex_t *lock = &(locked_fd_vector->operator[](handle).lock);
 
         if (pthread_mutex_trylock(lock) == 0)
         {
@@ -108,7 +125,7 @@ size_t aquire_scratch_handle()
  */
 int scratch_handle_to_fd(size_t handle)
 {
-    return locked_fd_vector[handle].fd;
+    return locked_fd_vector->operator[](handle).fd;
 }
 
 /**
@@ -118,6 +135,6 @@ int scratch_handle_to_fd(size_t handle)
  */
 void release_scratch_handle(size_t handle)
 {
-    pthread_mutex_t *lock = &(locked_fd_vector[handle].lock);
+    pthread_mutex_t *lock = &(locked_fd_vector->operator[](handle).lock);
     pthread_mutex_unlock(lock);
 }

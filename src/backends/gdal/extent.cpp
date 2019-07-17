@@ -27,6 +27,7 @@
 
 #include <pthread.h>
 
+#include <atomic>
 #include <map>
 #include <functional>
 #include <vector>
@@ -53,18 +54,23 @@ typedef std::vector<extent_bucket_t> extent_buckets_t;
 typedef std::hash<uint64_t> extent_bucket_hash_t;
 
 static extent_bucket_hash_t extent_bucket_hash = extent_bucket_hash_t{};
-static extent_buckets_t extent_buckets = extent_buckets_t{};
+static extent_buckets_t *extent_buckets = nullptr;
+static std::atomic<size_t> moop{0};
 
 /**
  * Initialize extent tracking.
  */
 void extent_init()
 {
-    for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
+    if (extent_buckets == nullptr)
     {
-        extent_buckets.push_back(extent_bucket_t{
-            PTHREAD_MUTEX_INITIALIZER,
-            extent_map_t{}});
+        extent_buckets = new extent_buckets_t{};
+        for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
+        {
+            extent_buckets->push_back(extent_bucket_t{
+                PTHREAD_MUTEX_INITIALIZER,
+                extent_map_t{}});
+        }
     }
 }
 
@@ -73,7 +79,11 @@ void extent_init()
  */
 void extent_deinit()
 {
-    extent_buckets.clear();
+    if (extent_buckets != nullptr)
+    {
+        delete extent_buckets;
+        extent_buckets = nullptr;
+    }
 }
 
 /**
@@ -87,8 +97,8 @@ bool extent_lock(uint64_t extent_tag, bool wrlock)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
 
-    auto index = extent_bucket_hash(extent_tag) % extent_buckets.size();
-    auto &bucket = extent_buckets[index];
+    auto index = extent_bucket_hash(extent_tag) % extent_buckets->size();
+    auto &bucket = extent_buckets->operator[](index);
 
     pthread_mutex_lock(&bucket.lock);
     auto itr = bucket.entries.find(extent_tag);
@@ -131,12 +141,32 @@ bool extent_lock(uint64_t extent_tag, bool wrlock)
     }
 }
 
-void extent_spin_lock(uint64_t extent_tag, bool wrlock)
+void extent_spinlock(uint64_t extent_tag, bool wrlock)
 {
     while (!extent_lock(extent_tag, wrlock))
     {
         sleep(0);
     }
+}
+
+/**
+ * Downgrade a write lock to a read lock.
+ *
+ * @param extent_tag The tag of the extent
+ */
+void extent_lock_downgrade(uint64_t extent_tag)
+{
+    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
+
+    auto index = extent_bucket_hash(extent_tag) % extent_buckets->size();
+    auto &bucket = extent_buckets->operator[](index);
+
+    pthread_mutex_lock(&bucket.lock);
+    auto itr = bucket.entries.find(extent_tag);
+    assert(itr != bucket.entries.end());
+    assert(itr->second.refcount == -1);
+    itr->second.refcount = 1;
+    pthread_mutex_unlock(&bucket.lock);
 }
 
 /**
@@ -150,8 +180,8 @@ void extent_unlock(uint64_t extent_tag, bool wrlock, bool mark_clean)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
 
-    auto index = extent_bucket_hash(extent_tag) % extent_buckets.size();
-    auto &bucket = extent_buckets[index];
+    auto index = extent_bucket_hash(extent_tag) % extent_buckets->size();
+    auto &bucket = extent_buckets->operator[](index);
 
     pthread_mutex_lock(&bucket.lock);
     auto itr = bucket.entries.find(extent_tag);
@@ -188,13 +218,11 @@ bool extent_dirty(uint64_t extent_tag)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
 
-    auto index = extent_bucket_hash(extent_tag) % extent_buckets.size();
-    auto &bucket = extent_buckets[index];
+    auto index = extent_bucket_hash(extent_tag) % extent_buckets->size();
+    auto &bucket = extent_buckets->operator[](index);
     auto itr = bucket.entries.find(extent_tag);
 
-    assert(itr != bucket.entries.end());
-
-    return itr->second.dirty;
+    return ((itr != bucket.entries.end()) && (itr->second.dirty));
 }
 
 /**
@@ -208,11 +236,19 @@ bool extent_clean(uint64_t extent_tag)
     return !(extent_dirty(extent_tag));
 }
 
-bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag)
+/**
+ * Return the tag of the first dirty, unreferenced extent through the
+ * pointer.
+ *
+ * @param extent_tag The return pointer
+ * @return A boolean indicating whether an extent was found
+ */
+bool extent_first_dirty_unreferenced(uint64_t *extent_tag)
 {
     for (size_t i = 0; i < EXTENT_BUCKETS; ++i)
     {
-        auto &bucket = extent_buckets[i];
+        auto j = (i + moop) % EXTENT_BUCKETS;
+        auto &bucket = extent_buckets->operator[](j);
 
         pthread_mutex_lock(&bucket.lock);
         for (auto itr = bucket.entries.begin(); itr != bucket.entries.end(); ++itr)
@@ -222,7 +258,21 @@ bool extent_first_dirty_and_unreferenced(uint64_t *extent_tag)
                 uint64_t retval = itr->first;
                 pthread_mutex_unlock(&bucket.lock);
                 *extent_tag = retval;
+                moop = j;
                 return true;
+            }
+            else if (!itr->second.dirty && itr->second.refcount == 0)
+            {
+                // From
+                // http://www.cplusplus.com/reference/map/map/erase/:
+                // Iterators, pointers and references referring to
+                // elements removed by the function are invalidated.
+                // All other iterators, pointers and references keep
+                // their validity.
+                auto old_itr = itr;
+                itr++;
+                itr++;
+                bucket.entries.erase(old_itr);
             }
         }
         pthread_mutex_unlock(&bucket.lock);

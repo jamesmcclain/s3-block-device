@@ -39,30 +39,61 @@
 
 #include <pthread.h>
 
+#include <set>
+
 #include "constants.h"
 #include "storage.h"
 #include "lru.h"
 #include "extent.h"
 #include "scratch.h"
+#include "sync.h"
 #include "fullio.h"
 
-// Block directory name
+struct flush_queue_entry_t
+{
+    uint64_t tag;
+    bool should_remove;
+
+    bool operator<(const flush_queue_entry_t &rhs) const
+    {
+        return (should_remove > rhs.should_remove) || (tag > rhs.tag);
+    }
+};
+
+typedef std::set<flush_queue_entry_t> flush_queue_t;
+
+static flush_queue_t *flush_queue = nullptr;
+static pthread_mutex_t flush_queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static const char *blockdir = nullptr;
 
-#if 0
-// Extent entry reaper thread
-static bool reaper_thread_continue = false;
-static pthread_t reaper_thread;
-#endif
+void *eviction_queue(void *arg);
+void *continuous_queue(void *arg);
+void *unqueue(void *arg);
 
-// ------------------------------------------------------------------------
+/**
+ * Initialize the flush queue.
+ */
+void queue_init()
+{
+    if (flush_queue == nullptr)
+    {
+        flush_queue = new flush_queue_t{};
+    }
+}
 
-// XXX clean extent entry reaper thread
-
-// ------------------------------------------------------------------------
-
-void *delayed_flush_extent(void *arg);
-void *continuous_flush_extent(void *arg);
+/**
+ * Deinitialize the flush queue.
+ */
+void queue_deinit()
+{
+    pthread_mutex_lock(&flush_queue_lock);
+    if (flush_queue != nullptr)
+    {
+        delete flush_queue;
+        flush_queue = nullptr;
+    }
+    flush_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+}
 
 /**
  * Initialize storage.
@@ -72,9 +103,11 @@ void *continuous_flush_extent(void *arg);
 void storage_init(const char *_blockdir)
 {
     blockdir = _blockdir;
+    queue_init();
     extent_init();
     scratch_init();
-    lru_init(delayed_flush_extent, continuous_flush_extent);
+    lru_init(eviction_queue);
+    sync_init(continuous_queue, unqueue);
 }
 
 /**
@@ -82,28 +115,94 @@ void storage_init(const char *_blockdir)
  */
 void storage_deinit()
 {
+    sync_deinit();
     lru_deinit();
     scratch_deinit();
     extent_deinit();
+    queue_deinit();
     blockdir = nullptr;
 }
 
 /**
- * Flush an extent to storage.  Only one instance of this function
- * should ever be active at once.
+ * Bring an extent in from storage to the scratch file.  The caller is
+ * assumed to already have a write lock on the extent.
+ *
+ * @param extent_tag The extent to read
+ * @param page_tag The page to seek to
+ * @param fd The file descriptor to use
+ * @return A boolean indicating whether the extent is now present
+ */
+bool storage_unflush(uint64_t extent_tag, uint64_t page_tag, int fd)
+{
+    assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
+
+    // The extent should be either completely absent, or completely
+    // present.  If a hole is found in the extent, then assume it to
+    // be completely absent and replace it entirely.
+    if (lseek(fd, extent_tag, SEEK_HOLE) < static_cast<off_t>(extent_tag + EXTENT_SIZE))
+    {
+        char filename[0x100];
+        uint8_t *extent_array = new uint8_t[EXTENT_SIZE];
+        VSILFILE *handle = NULL;
+
+        memset(extent_array, 0x33, EXTENT_SIZE);
+
+        // If possible, read the extent from remote storage
+        sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
+        if ((handle = VSIFOpenL(filename, "r")) != NULL)
+        {
+            for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
+            {
+                off_t offset = (i * PAGE_SIZE);
+                if (VSIFReadL(extent_array + offset, PAGE_SIZE, 1, handle) != 1)
+                {
+                    free(extent_array);
+                    VSIFCloseL(handle);
+                    return false;
+                }
+            }
+            VSIFCloseL(handle);
+        }
+
+        // Attempt to write the bytes into the scratch file
+        if (lseek(fd, extent_tag, SEEK_SET) == static_cast<off_t>(extent_tag))
+        {
+            fullwrite(fd, extent_array, EXTENT_SIZE);
+        }
+        else
+        {
+            free(extent_array);
+            return false;
+        }
+
+        // Bytes written to scratch file, so free resources and try to
+        // seek to the original offset
+        free(extent_array);
+        return (lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag));
+    }
+    else
+    {
+        // Nothing to do, so free resources and report success
+        return true;
+    }
+}
+
+/**
+ * Flush an extent to storage from the scratch file.
  *
  * @param page_tag The tag whose entire extent should be flushed
  * @param should_remove Whether or not to remove the extent from the local cache
  * @return Boolean indicating success or failure
  */
-bool flush_extent(uint64_t extent_tag, bool should_remove = false)
+bool storage_flush(uint64_t extent_tag, bool should_remove = false)
 {
     assert(extent_tag == (extent_tag & (~EXTENT_MASK)));
 
-    uint8_t *extent_array = new uint8_t[EXTENT_SIZE];
+    // Aquire a write lock on the extent
+    extent_spinlock(extent_tag, true);
 
-    // If the extent is clean, leave quickly (possibly punching a hole if needed)
-    extent_spin_lock(extent_tag, true);
+    // If the extent is clean, leave quickly (possibly punching a hole
+    // in the file on the way out, if needed)
     if (extent_clean(extent_tag))
     {
         if (should_remove)
@@ -119,22 +218,24 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
         extent_unlock(extent_tag, true, true);
         return true;
     }
-    extent_unlock(extent_tag, true, false);
 
-    // Bring contents of all pages into "extent_array"
-    for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
+    // Aquire memory
+    uint8_t *extent_array = new uint8_t[EXTENT_SIZE];
+
+    // Read the extent from the scratch file into the array
+    auto scratch_handle = aquire_scratch_handle();
+    int fd = scratch_handle_to_fd(scratch_handle);
+    if (lseek(fd, extent_tag, SEEK_DATA) != static_cast<off_t>(extent_tag))
     {
-        uint64_t inner_offset = i * PAGE_SIZE;
-        bool should_report = !should_remove; // If pages are about to be removed, then no reason to report them as touched
-        aligned_page_read(
-            extent_tag + inner_offset,
-            PAGE_SIZE,
-            extent_array + inner_offset,
-            should_report);
+        extent_unlock(extent_tag, true, true);
+        delete extent_array;
+        release_scratch_handle(scratch_handle);
+        return false;
     }
+    fullread(fd, extent_array, EXTENT_SIZE);
+    release_scratch_handle(scratch_handle);
 
     // Open extent file for writing
-    extent_spin_lock(extent_tag, true);
     char filename[0x100];
     VSILFILE *handle = NULL;
     sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
@@ -153,7 +254,6 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
         // Write into extent file
         if (VSIFWriteL(extent_array + offset, PAGE_SIZE, 1, handle) != 1)
         {
-            VSIFFlushL(handle);
             VSIFCloseL(handle);
             delete extent_array;
             extent_unlock(extent_tag, true, false);
@@ -176,8 +276,8 @@ bool flush_extent(uint64_t extent_tag, bool should_remove = false)
     // Close extent file, release locks, delete array
     VSIFFlushL(handle);
     VSIFCloseL(handle);
-    extent_unlock(extent_tag, true, true);
     delete extent_array;
+    extent_unlock(extent_tag, true, true);
 
     return true;
 }
@@ -199,99 +299,29 @@ bool aligned_page_read(uint64_t page_tag, uint16_t size, uint8_t *bytes, bool sh
     // Note that the page has been touched
     if (should_report)
     {
-        lru_report_page(page_tag);
+        lru_report_extent(extent_tag);
     }
 
     // Acquire resources
-    extent_spin_lock(extent_tag, false);
+    extent_spinlock(extent_tag, true);
     auto scratch_handle = aquire_scratch_handle();
     int fd = scratch_handle_to_fd(scratch_handle);
 
-    if (lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) // If page already exists ...
+    // Read the bytes
+    if ((lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) ||
+        storage_unflush(extent_tag, page_tag, fd))
     {
+        extent_lock_downgrade(extent_tag); // ?
         fullread(fd, bytes, size);
         release_scratch_handle(scratch_handle);
         extent_unlock(extent_tag, false, false);
         return true;
     }
-    else // If the page does not yet exist ...
+    else
     {
-        char filename[0x100];
-        VSILFILE *handle = NULL;
-        uint8_t *scratch_page = new uint8_t[PAGE_SIZE];
-
-        // Attempt to open the far-away extent file
-        sprintf(filename, EXTENT_TEMPLATE, blockdir, extent_tag);
-        handle = VSIFOpenL(filename, "r");
-
-        // Loop through every page in the extent
-        for (unsigned int i = 0; i < PAGES_PER_EXTENT; ++i)
-        {
-            uint64_t offset = (i * PAGE_SIZE);
-            uint64_t inner_page_tag = extent_tag + offset;
-
-            if (lseek(fd, inner_page_tag, SEEK_DATA) == static_cast<off_t>(inner_page_tag)) // If the page already exists ...
-            {
-                if (inner_page_tag == page_tag)
-                {
-                    fullread(fd, bytes, size);
-                }
-                continue;
-            }
-            else // If the page does not yet exist ...
-            {
-                if (handle == NULL) // .. and the extent file was not openable ...
-                {
-                    if (inner_page_tag == page_tag)
-                    {
-                        memset(bytes, 0x33, size);
-                    }
-                }
-                else // ... and the extent was openable ...
-                {
-                    if (VSIFSeekL(handle, offset, SEEK_SET) != 0)
-                    {
-                        release_scratch_handle(scratch_handle);
-                        extent_unlock(extent_tag, false, false);
-                        delete scratch_page;
-                        return false;
-                    }
-                    if (VSIFReadL(scratch_page, PAGE_SIZE, 1, handle) != 1)
-                    {
-                        release_scratch_handle(scratch_handle);
-                        extent_unlock(extent_tag, false, false);
-                        delete scratch_page;
-                        return false;
-                    }
-
-                    // Attempt to write the page to the local scratch file
-                    if (lseek(fd, inner_page_tag, SEEK_SET) != static_cast<off_t>(inner_page_tag))
-                    {
-                        release_scratch_handle(scratch_handle);
-                        extent_unlock(extent_tag, false, false);
-                        delete scratch_page;
-                        return false;
-                    }
-                    fullwrite(fd, scratch_page, PAGE_SIZE);
-
-                    if (inner_page_tag == page_tag)
-                    {
-                        memcpy(bytes, scratch_page, size);
-                    }
-                }
-            }
-        }
-
-        // Release handle and other resources
-        if (handle != NULL)
-        {
-            VSIFCloseL(handle);
-        }
         release_scratch_handle(scratch_handle);
-        extent_unlock(extent_tag, false, false);
-        delete scratch_page;
-
-        return true;
+        extent_unlock(extent_tag, true, false);
+        return false;
     }
 }
 
@@ -310,14 +340,16 @@ bool aligned_whole_page_write(uint64_t page_tag, const uint8_t *bytes)
     uint64_t extent_tag = page_tag & (~EXTENT_MASK);
 
     // Note that the page has been touched
-    lru_report_page(page_tag);
+    lru_report_extent(extent_tag);
 
     // Acquire resources
-    extent_spin_lock(extent_tag, true);
+    extent_spinlock(extent_tag, true);
     auto scratch_handle = aquire_scratch_handle();
     int fd = scratch_handle_to_fd(scratch_handle);
 
-    if (lseek(fd, page_tag, SEEK_SET) == static_cast<off_t>(page_tag))
+    // Write the bytes
+    if ((lseek(fd, page_tag, SEEK_DATA) == static_cast<off_t>(page_tag)) ||
+        storage_unflush(extent_tag, page_tag, fd))
     {
         fullwrite(fd, bytes, PAGE_SIZE);
         release_scratch_handle(scratch_handle);
@@ -438,22 +470,29 @@ extern "C" int storage_write(off_t offset, size_t size, const uint8_t *bytes)
 // ------------------------------------------------------------------------
 
 /**
- * Flush the given extent after a short delay.  The delay is to
- * prevent thrashing if there is cache pressure and, for example, a
- * page has been read as part of getting a complete extent to perform
- * an extent write as part of an eviction.
+ * Insert an entry into the flush queue.
+ *
+ * @param extent_tag The tag of the extent in question
+ * @param should_remove Whether the extent should be removed from the scratch file
+ */
+inline void flush_queue_insert(uint64_t extent_tag, bool should_remove)
+{
+    pthread_mutex_lock(&flush_queue_lock);
+    flush_queue->insert(flush_queue_entry_t{extent_tag, should_remove});
+    pthread_mutex_unlock(&flush_queue_lock);
+}
+
+/**
+ * Flush an evicted extent.
  *
  * @param arg The tag of the extent to flush
  * @return Always nullptr
  */
-void *delayed_flush_extent(void *arg)
+void *eviction_queue(void *arg)
 {
     uint64_t tag = reinterpret_cast<uint64_t>(arg);
 
-    lru_aquire_thread();
-    sleep(1);
-    flush_extent(tag, true);
-    lru_release_thread();
+    flush_queue_insert(tag, true);
     return nullptr;
 }
 
@@ -463,19 +502,51 @@ void *delayed_flush_extent(void *arg)
  * @param arg Unused
  * @return Always nullptr
  */
-void *continuous_flush_extent(void *arg)
+void *continuous_queue(void *arg)
 {
     while (sync_thread_continue)
     {
         uint64_t extent_tag;
 
-        if (extent_first_dirty_and_unreferenced(&extent_tag))
+        if (extent_first_dirty_unreferenced(&extent_tag))
         {
-            flush_extent(extent_tag);
+            flush_queue_insert(extent_tag, false);
         }
         else
         {
-            sleep(sync_thread_interval);
+            sleep(1);
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * Unqueue extents: write them from the scratch file to storage.
+ *
+ * @param arg Unused
+ * @return Always nullptr
+ */
+void *unqueue(void *arg)
+{
+    while (sync_thread_continue)
+    {
+        pthread_mutex_lock(&flush_queue_lock);
+        if (!flush_queue->empty())
+        {
+            auto itr = flush_queue->cbegin();
+            auto tag = itr->tag;
+            auto should_remove = itr->should_remove;
+#if 0
+            fprintf(stderr, "XXX size=%ld tag=%016lx should_remove=%s\n", flush_queue->size(), tag, should_remove ? "true" : "false");
+#endif
+            flush_queue->erase(itr);
+            pthread_mutex_unlock(&flush_queue_lock);
+            storage_flush(tag, should_remove);
+        }
+        else
+        {
+            pthread_mutex_unlock(&flush_queue_lock);
+            sleep(1);
         }
     }
     return nullptr;

@@ -22,19 +22,12 @@
  * THE SOFTWARE.
  */
 
-#ifndef __EXTENT_H__
-#define __EXTENT_H__
+#ifndef __SYNC_H__
+#define __SYNC_H__
 
-#include <cstdint>
+extern bool sync_thread_continue;
 
-void extent_init();
-void extent_deinit();
-bool extent_lock(uint64_t extent_tag, bool wrlock);
-void extent_spinlock(uint64_t extent_tag, bool wrlock);
-void extent_lock_downgrade(uint64_t extent_tag);
-void extent_unlock(uint64_t extent_tag, bool wrlock, bool mark_clean);
-bool extent_dirty(uint64_t extent_tag);
-bool extent_clean(uint64_t extent_tag);
-bool extent_first_dirty_unreferenced(uint64_t *extent_tag);
+void sync_init(void *(*f)(void *), void *(*g)(void *));
+void sync_deinit();
 
 #endif
