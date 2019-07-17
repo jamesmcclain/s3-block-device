@@ -30,7 +30,7 @@
 
 constexpr uint64_t PAGE_SIZE = 0x1000;
 constexpr uint64_t PAGE_MASK = (PAGE_SIZE - 1);
-constexpr uint64_t PAGES_PER_EXTENT = (1 << 10);
+constexpr uint64_t PAGES_PER_EXTENT = (1 << 12);
 constexpr uint64_t EXTENT_SIZE = PAGE_SIZE * PAGES_PER_EXTENT;
 constexpr uint64_t EXTENT_MASK = (EXTENT_SIZE - 1);
 constexpr size_t LOCAL_CACHE_DEFAULT_MEGABYTES = 4096;

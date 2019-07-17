@@ -514,7 +514,7 @@ void *continuous_queue(void *arg)
         }
         else
         {
-            sleep(1);
+            sleep(33);
         }
     }
     return nullptr;
